@@ -80,8 +80,22 @@ class GenomicEvaluator:
                     test_label = f'SeqL {seq_len}, PredL {pred_len}'
                     results[model_type][test_label] = []
 
+                    # Random samples, random start positions
+                    # for rep_idx in range(repitions): 
+                    #     input, label = self._data_loader.read(
+                    #         splits=[
+                    #             seq_len, 
+                    #             pred_len,
+                    #         ],
+                    #     )
+                    
+                    # Initialize unique samples for this test (up to repitions count)
+                    # If repitions > dataset size, will cycle through available samples
+                    num_samples = min(repitions, len(self._data_loader._data))
+                    self._data_loader.initialize_unique_samples(num_samples=num_samples)
+
                     for rep_idx in range(repitions): 
-                        input, label = self._data_loader.read(
+                        input, label = self._data_loader.read_start(
                             splits=[
                                 seq_len, 
                                 pred_len,

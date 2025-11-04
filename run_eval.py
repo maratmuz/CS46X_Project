@@ -9,7 +9,7 @@ def main():
 
     evaluator.run(seq_pred_cfg_1)
 
-    print('\nEvaluation finished, results saved to "runs/eval/<run_id>.\n')
+    print('\nEvaluation finished, results saved to "output/eval/results_<timestamp>".\n')
 
 if __name__ == '__main__':
     main()
