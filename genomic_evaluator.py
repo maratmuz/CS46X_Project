@@ -106,16 +106,17 @@ class GenomicEvaluator:
                         input, label = self._data_loader.read_midpoint(pred_len=pred_len)
 
                         try:
-                            with open(log_dir / "model_output.log", "a") as f, \
-                                contextlib.redirect_stdout(f), \
-                                contextlib.redirect_stderr(f):
-                                output = model.generate(
-                                    prompt_seqs=[input],
-                                    n_tokens=pred_len,
-                                    temperature=1.0,
-                                    top_k=1,
-                                    top_p=1.0,
-                                )
+                            with torch.inference_mode():
+                                with open(log_dir / "model_output.log", "a") as f, \
+                                    contextlib.redirect_stdout(f), \
+                                    contextlib.redirect_stderr(f):
+                                    output = model.generate(
+                                        prompt_seqs=[input],
+                                        n_tokens=pred_len,
+                                        temperature=1.0,
+                                        top_k=1,
+                                        top_p=1.0,
+                                    )
 
                         except Exception as e:
                             err_file = log_dir / "errors.log"
@@ -127,7 +128,10 @@ class GenomicEvaluator:
 
                         pred_seq = output.sequences[0]
                         acc, matches = self._sequence_identity(label, pred_seq)
-                        results[model_type][test_label].append(acc) 
+                        results[model_type][test_label].append(acc)
+                        
+                        # Clear output tensors 
+                        del output, pred_seq
 
                         if (rep_idx + 1) % 4 == 0:
                             print(

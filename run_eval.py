@@ -1,9 +1,17 @@
 import random
+import gc
 import numpy as np
 import torch
 from genomic_evaluator import GenomicEvaluator
 
 def main():
+    
+    # Clear any existing CUDA memory from previous runs
+    torch.cuda.empty_cache()
+    gc.collect()
+    print("Cleared CUDA cache before starting")
+    print(f"GPU Memory: {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, {torch.cuda.memory_reserved() / 1e9:.2f} GB reserved\n")
+    
     # Set random seeds for reproducibility
     SEED = 1
     random.seed(SEED)
