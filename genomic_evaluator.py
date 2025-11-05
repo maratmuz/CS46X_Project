@@ -62,6 +62,7 @@ class GenomicEvaluator:
             self._data_loader.load(
                 path=data_path, 
                 format=data_format,
+                verbose=True,
             )
 
             for model_idx, model_type in enumerate(model_types):
@@ -80,27 +81,29 @@ class GenomicEvaluator:
                     test_label = f'SeqL {seq_len}, PredL {pred_len}'
                     results[model_type][test_label] = []
 
-                    # Random samples, random start positions
+                    # Different read modes (comment/uncomment to switch):
+                    
+                    # Mode 1: Random samples, random start positions
                     # for rep_idx in range(repitions): 
                     #     input, label = self._data_loader.read(
-                    #         splits=[
-                    #             seq_len, 
-                    #             pred_len,
-                    #         ],
+                    #         splits=[seq_len, pred_len],
                     #     )
                     
-                    # Initialize unique samples for this test (up to repitions count)
-                    # If repitions > dataset size, will cycle through available samples
+                    # Mode 2: Unique samples, start from position 0
+                    # num_samples = min(repitions, len(self._data_loader._data))
+                    # self._data_loader.initialize_unique_samples(num_samples=num_samples)
+                    # for rep_idx in range(repitions): 
+                    #     input, label = self._data_loader.read_start(
+                    #         splits=[seq_len, pred_len],
+                    #     )
+                    
+                    # Mode 3: Midpoint split (matches test_evo2_generation.py)
+                    # Note: seq_len from config is ignored; prompt length is 50% of actual sequence
                     num_samples = min(repitions, len(self._data_loader._data))
                     self._data_loader.initialize_unique_samples(num_samples=num_samples)
 
                     for rep_idx in range(repitions): 
-                        input, label = self._data_loader.read_start(
-                            splits=[
-                                seq_len, 
-                                pred_len,
-                            ],
-                        )
+                        input, label = self._data_loader.read_midpoint(pred_len=pred_len)
 
                         try:
                             with open(log_dir / "model_output.log", "a") as f, \
@@ -110,7 +113,8 @@ class GenomicEvaluator:
                                     prompt_seqs=[input],
                                     n_tokens=pred_len,
                                     temperature=1.0,
-                                    top_k=4
+                                    top_k=1,
+                                    top_p=1.0,
                                 )
 
                         except Exception as e:

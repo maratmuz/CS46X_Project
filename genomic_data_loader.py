@@ -11,13 +11,25 @@ class GenomicDataLoader:
         self._selected_samples = None
         self._sample_index = 0
 
-    def load(self, path, format):
+    def load(self, path, format, verbose=False):
         if format.lower() not in self.supported_formats:
             raise ValueError(
                 f'Format "{format}" was not found in the list of supported data types.'
             )
         elif format.lower() == 'fasta':
             self._data = list(SeqIO.parse(path, "fasta"))
+            
+            # Print information about loaded sequences
+            if verbose:
+                print(f"\nLoaded {len(self._data)} sequences from {path}")
+                print("=" * 70)
+                for idx, seq in enumerate(self._data, 1):
+                    seq_len = len(seq)
+                    mid_point = 2 * (seq_len // 4)
+                    print(f"  Sample {idx}: {seq.id[:40]:40} | Length: {seq_len:8,} | Midpoint: {mid_point:8,}")
+                print("=" * 70)
+                print(f"Average sequence length: {sum(len(s) for s in self._data) / len(self._data):,.0f}")
+                print()
         
         elif format.lower() == 'gff3':
             pass
@@ -91,4 +103,38 @@ class GenomicDataLoader:
             data.append(str(split_data.seq))
         
         return data
+
+    def read_midpoint(self, pred_len):
+        """
+        Read from the pool of unique samples using midpoint split.
+        Splits sequence at midpoint (50%) for prompt and target, matching test_evo2_generation.py.
+        Cycles through the unique samples selected by initialize_unique_samples().
+        
+        Args:
+            pred_len: Length of the prediction/target sequence to extract after midpoint
+        
+        Returns:
+            Tuple of (prompt, target) strings
+        """
+        if self._selected_samples is None:
+            raise RuntimeError(
+                "Must call initialize_unique_samples() before using read_midpoint()"
+            )
+
+        sampled_seq = self._selected_samples[self._sample_index % len(self._selected_samples)]
+        self._sample_index += 1
+        
+        seq_len = len(sampled_seq)
+        mid_point = 2 * (seq_len // 4)
+        
+        # Check if we have enough sequence after midpoint for prediction
+        if mid_point + pred_len > seq_len:
+            raise ValueError(
+                f"Sequence length {seq_len} is too short for midpoint {mid_point} + pred_len {pred_len}"
+            )
+        
+        prompt = str(sampled_seq[:mid_point].seq)
+        target = str(sampled_seq[mid_point:mid_point + pred_len].seq)
+        
+        return prompt, target
 
