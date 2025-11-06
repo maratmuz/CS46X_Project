@@ -90,20 +90,20 @@ class GenomicEvaluator:
                     #     )
                     
                     # Mode 2: Unique samples, start from position 0
-                    # num_samples = min(repitions, len(self._data_loader._data))
-                    # self._data_loader.initialize_unique_samples(num_samples=num_samples)
-                    # for rep_idx in range(repitions): 
-                    #     input, label = self._data_loader.read_start(
-                    #         splits=[seq_len, pred_len],
-                    #     )
+                    num_samples = min(repitions, len(self._data_loader._data))
+                    self._data_loader.initialize_unique_samples(num_samples=num_samples)
+                    for rep_idx in range(repitions): 
+                        input, label = self._data_loader.read_start(
+                            splits=[seq_len, pred_len],
+                        )
                     
                     # Mode 3: Midpoint split (matches test_evo2_generation.py)
                     # Note: seq_len from config is ignored; prompt length is 50% of actual sequence
-                    num_samples = min(repitions, len(self._data_loader._data))
-                    self._data_loader.initialize_unique_samples(num_samples=num_samples)
+                    # num_samples = min(repitions, len(self._data_loader._data))
+                    # self._data_loader.initialize_unique_samples(num_samples=num_samples)
 
-                    for rep_idx in range(repitions): 
-                        input, label = self._data_loader.read_midpoint(pred_len=pred_len)
+                    # for rep_idx in range(repitions): 
+                    #     input, label = self._data_loader.read_midpoint(pred_len=pred_len)
 
                         try:
                             with torch.inference_mode():
