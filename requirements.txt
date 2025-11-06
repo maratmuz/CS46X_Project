@@ -1,4 +1,0 @@
-pip install biopython
-pip install bcbio-gff
-pip install omegaconf
-pip install pandas

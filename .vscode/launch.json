@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Evaluation",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_eval.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Training",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_train.py",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Current file",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        }
+
+    ]
+}
