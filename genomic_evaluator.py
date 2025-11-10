@@ -60,7 +60,7 @@ class GenomicEvaluator:
             data_format = run.data.format
 
             self._data_loader.load(
-                path=data_path, 
+                path=data_path,
                 format=data_format,
                 verbose=True,
             )
@@ -82,27 +82,27 @@ class GenomicEvaluator:
                     results[model_type][test_label] = []
 
                     # Different read modes (comment/uncomment to switch):
-                    
+
                     # Mode 1: Random samples, random start positions
-                    # for rep_idx in range(repitions): 
+                    # for rep_idx in range(repitions):
                     #     input, label = self._data_loader.read(
                     #         splits=[seq_len, pred_len],
                     #     )
-                    
+
                     # Mode 2: Unique samples, start from position 0
                     num_samples = min(repitions, len(self._data_loader._data))
                     self._data_loader.initialize_unique_samples(num_samples=num_samples)
-                    for rep_idx in range(repitions): 
+                    for rep_idx in range(repitions):
                         input, label = self._data_loader.read_start(
                             splits=[seq_len, pred_len],
                         )
-                    
+
                     # Mode 3: Midpoint split (matches test_evo2_generation.py)
                     # Note: seq_len from config is ignored; prompt length is 50% of actual sequence
                     # num_samples = min(repitions, len(self._data_loader._data))
                     # self._data_loader.initialize_unique_samples(num_samples=num_samples)
 
-                    # for rep_idx in range(repitions): 
+                    # for rep_idx in range(repitions):
                     #     input, label = self._data_loader.read_midpoint(pred_len=pred_len)
 
                         try:
@@ -126,19 +126,19 @@ class GenomicEvaluator:
                                 print(error)
                             continue  # skip to next repetition
 
-                        pred_seq = output.sequences[0]
-                        acc, matches = self._sequence_identity(label, pred_seq)
-                        results[model_type][test_label].append(acc)
-                        
-                        # Clear output tensors 
-                        del output, pred_seq
+            pred_seq = output.sequences[0]
+            acc, matches = self._sequence_identity(label, pred_seq)
+            results[model_type][test_label].append(acc)
 
-                        if (rep_idx + 1) % 4 == 0:
-                            print(
-                                f'{"Model:":<11}{model_idx + 1:>2} / {len(model_types):<2} | {model_type:<20}\n'
-                                f'{"Test:":<11}{test_idx + 1:>2} / {len(eval_tests.values()):<2} | {test_label:<20}\n'
-                                f'{"Repetition:":<11}{rep_idx + 1:>2} / {repitions:<2}\n'
-                            )
+            # Clear output tensors
+            del output, pred_seq
+
+            if (rep_idx + 1) % 4 == 0:
+                print(
+                    f'{"Model:":<11}1 / 1 | {model_type:<20}\n'
+                    f'{"Test:":<11}1 / 1 | {test_label:<20}\n'
+                    f'{"Repetition:":<11}{rep_idx + 1:>2} / {repetitions:<2}\n'
+                )
 
                 del model
                 gc.collect()
@@ -147,6 +147,92 @@ class GenomicEvaluator:
             self._save_results(results, out_root, run_idx)
 
         pass
+
+    def run_single(self, model_type, data_path, data_format, seq_len, pred_len, repetitions):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_root = Path("output") / "eval" / f"results_{ts}"
+        out_root.mkdir(parents=True, exist_ok=True)
+
+        results = {}
+
+        log_dir = out_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        self._data_loader.load(
+            path=data_path,
+            format=data_format,
+            verbose=True,
+        )
+
+        model = None
+        try:
+            with open(log_dir / "model_load.log", "a") as f, \
+                contextlib.redirect_stdout(f), \
+                contextlib.redirect_stderr(f):
+
+                model = self._load_model(model_type)
+        except Exception as e:
+            err_file = log_dir / "errors.log"
+            with open(err_file, "a") as ef:
+                error = f"[ERROR] Failed to load model {model_type}: {e}\n"
+                ef.write(error)
+                print(error)
+            return
+
+        results[model_type] = {}
+
+        test_label = f'SeqL {seq_len}, PredL {pred_len}'
+        results[model_type][test_label] = []
+
+        # Mode 2: Unique samples, start from position 0
+        num_samples = min(repetitions, len(self._data_loader._data))
+        self._data_loader.initialize_unique_samples(num_samples=num_samples)
+        for rep_idx in range(repetitions):
+            input, label = self._data_loader.read_start(
+                splits=[seq_len, pred_len],
+            )
+
+            try:
+                with torch.inference_mode():
+                    with open(log_dir / "model_output.log", "a") as f, \
+                        contextlib.redirect_stdout(f), \
+                        contextlib.redirect_stderr(f):
+                        output = model.generate(
+                            prompt_seqs=[input],
+                            n_tokens=pred_len,
+                            temperature=1.0,
+                            top_k=1,
+                            top_p=1.0,
+                        )
+
+            except Exception as e:
+                err_file = log_dir / "errors.log"
+                with open(err_file, "a") as ef:
+                    error = f"[ERROR] model.generate failed for {model_type}, test {test_label}, rep {rep_idx}: {e}\n"
+                    ef.write(error)
+                    print(error)
+                continue  # skip to next repetition
+
+            pred_seq = output.sequences[0]
+            acc, matches = self._sequence_identity(label, pred_seq)
+            results[model_type][test_label].append(acc)
+
+            # Clear output tensors
+            del output, pred_seq
+
+            if (rep_idx + 1) % 4 == 0:
+                print(
+                    f'{"Model:":<11}1 / 1 | {model_type:<20}\n'
+                    f'{"Test:":<11}1 / 1 | {test_label:<20}\n'
+                    f'{"Repetition:":<11}{rep_idx + 1:>2} / {repetitions:<2}\n'
+                )
+
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        self._save_results(results, out_root, 0)
+        return out_root
     
     def _sequence_identity(self, seq_a: str, seq_b: str) -> tuple[float, int]:
         assert len(seq_a) == len(seq_b), "Sequences must be of equal length"
