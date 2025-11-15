@@ -11,6 +11,7 @@ from data_loader import read_chars
 import pandas as pd
 from datetime import datetime
 import contextlib
+import io
 
 codon_map = {
     "UUU": "Phe", "UUC": "Phe", "UUA": "Leu", "UUG": "Leu",
@@ -75,13 +76,13 @@ def _load_model(model_type):
 
     return model
 
-def _sequence_identity(seq_a: str, seq_b: str) -> tuple[float, int]:
+def _sequence_identity(seq_a: str, seq_b: str) -> tuple[float, int, int]:
     # Assuming seq_a and seq_b are strings of 3-letter AA codes concatenated
     aa_a = [seq_a[i:i+3] for i in range(0, len(seq_a), 3)]
     aa_b = [seq_b[i:i+3] for i in range(0, len(seq_b), 3)]
     min_len = min(len(aa_a), len(aa_b))
     if min_len == 0:
-        return 0.0, 0
+        return 0.0, 0, 0
 
     matches = 0
     for aa1, aa2 in zip(aa_a[:min_len], aa_b[:min_len]):
@@ -89,7 +90,16 @@ def _sequence_identity(seq_a: str, seq_b: str) -> tuple[float, int]:
             matches += 1
 
     accuracy = matches / min_len
-    return accuracy, matches
+    return accuracy, matches, min_len
+
+
+def _nucleotide_identity(seq_a: str, seq_b: str) -> tuple[float, int, int]:
+    min_len = min(len(seq_a), len(seq_b))
+    if min_len == 0:
+        return 0.0, 0, 0
+
+    matches = sum(1 for a, b in zip(seq_a[:min_len], seq_b[:min_len]) if a == b)
+    return matches / min_len, matches, min_len
 
 
 
@@ -166,49 +176,77 @@ def main():
 
     for rep_idx in range(args.repetitions):
         offset = rep_idx * (args.seq_len + args.pred_len)
+        coverage_end = offset + args.seq_len + args.pred_len
+        print("\n" + "=" * 80)
+        print(
+            f"Repetition {rep_idx + 1}/{args.repetitions} | "
+            f"Offset {offset:,}–{coverage_end:,} | "
+            f"Prompt {args.seq_len} | Predict {args.pred_len}"
+        )
+        print(f"Source file: {data_path.name}")
+        print("=" * 80)
+
         input_seq = read_chars(args.seq_len, str(data_path), offset=offset)
         label = read_chars(3 * args.pred_len, str(data_path), offset=offset + args.seq_len)
 
         try:
             with torch.inference_mode():
-                output = model.generate(
-                    prompt_seqs=[input_seq],
-                    n_tokens=args.pred_len,
-                    temperature=1.0,
-                    top_k=1,
-                    top_p=1.0,
-                )
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    output = model.generate(
+                        prompt_seqs=[input_seq],
+                        n_tokens=args.pred_len,
+                        temperature=1.0,
+                        top_k=1,
+                        top_p=1.0,
+                    )
         except Exception as e:
             print(f"[ERROR] model.generate failed for {model_type}, test {test_label}, rep {rep_idx}: {e}")
             continue
 
         pred_seq = output.sequences[0]
+        label_nt = label[:len(pred_seq)] if len(label) >= len(pred_seq) else label
         pred_aa = seq_to_aa(pred_seq)
-        label_aa = seq_to_aa(label)
-        acc, matches = _sequence_identity(label_aa, pred_aa)
-        results[model_type][test_label].append(acc)
+        label_aa = seq_to_aa(label_nt)
+        aa_acc, aa_matches, aa_total = _sequence_identity(label_aa, pred_aa)
+        nt_acc, nt_matches, nt_total = _nucleotide_identity(label_nt, pred_seq)
+        results[model_type][test_label].append(aa_acc)
 
         # Print predicted and actual AA sequences (3-letter codes) with mismatches highlighted in red
-        print(f"Predicted AA: {pred_aa}")
+        print(f"[rep {rep_idx + 1}] Model output (nt): {pred_seq}")
+        print(f"[rep {rep_idx + 1}] Actual output (nt): {label_nt}")
+
+        label_tokens = [label_aa[i:i+3] for i in range(0, len(label_aa), 3)]
+        pred_tokens = [pred_aa[i:i+3] for i in range(0, len(pred_aa), 3)]
         highlighted_label = ''
-        for i in range(0, len(label_aa), 3):
-            aa = label_aa[i:i+3]
-            idx = i // 3
-            if idx < len(pred_aa) // 3 and aa != pred_aa[idx*3:(idx+1)*3]:
-                highlighted_label += f'\033[91m{aa}\033[0m'
+        for idx, aa_label in enumerate(label_tokens):
+            if idx < len(pred_tokens):
+                aa_pred = pred_tokens[idx]
+                if aa_label != aa_pred:
+                    highlighted_label += f'\033[91m{aa_label}\033[0m'
+                else:
+                    highlighted_label += aa_label
             else:
-                highlighted_label += aa
-        print(f"Actual AA:    {highlighted_label}")
+                highlighted_label += aa_label
+
+        print(f"[rep {rep_idx + 1}] Model output (aa): {pred_aa}")
+        print(f"[rep {rep_idx + 1}] Actual output (aa): {highlighted_label}")
+        if nt_total:
+            print(
+                f"[rep {rep_idx + 1}] Nucleotide accuracy: {nt_acc * 100:6.2f}% "
+                f"({nt_matches}/{nt_total})"
+            )
+        else:
+            print(f"[rep {rep_idx + 1}] Nucleotide accuracy: N/A")
+        if aa_total:
+            print(
+                f"[rep {rep_idx + 1}] Amino-acid accuracy: {aa_acc * 100:6.2f}% "
+                f"({aa_matches}/{aa_total})"
+            )
+        else:
+            print(f"[rep {rep_idx + 1}] Amino-acid accuracy: N/A")
         print()
 
         del output, pred_seq
-
-        if (rep_idx + 1) % 4 == 0:
-            print(
-                f'{"Model:":<11}1 / 1 | {model_type:<20}\n'
-                f'{"Test:":<11}1 / 1 | {test_label:<20}\n'
-                f'{"Repetition:":<11}{rep_idx + 1:>2} / {args.repetitions:<2}\n'
-            )
 
     # average results table
     df_avg = pd.DataFrame({
