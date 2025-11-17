@@ -25,7 +25,7 @@ class GenomicDataLoader:
                 print("=" * 70)
                 for idx, seq in enumerate(self._data, 1):
                     seq_len = len(seq)
-                    mid_point = 2 * (seq_len // 4)
+                    mid_point = seq_len // 2
                     print(f"  Sample {idx}: {seq.id[:40]:40} | Length: {seq_len:8,} | Midpoint: {mid_point:8,}")
                 print("=" * 70)
                 print(f"Average sequence length: {sum(len(s) for s in self._data) / len(self._data):,.0f}")
@@ -125,7 +125,7 @@ class GenomicDataLoader:
         self._sample_index += 1
         
         seq_len = len(sampled_seq)
-        mid_point = 2 * (seq_len // 4)
+        mid_point = seq_len // 2
         
         # Check if we have enough sequence after midpoint for prediction
         if mid_point + pred_len > seq_len:
