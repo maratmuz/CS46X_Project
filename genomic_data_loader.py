@@ -28,7 +28,14 @@ class GenomicDataLoader:
                     mid_point = seq_len // 2
                     print(f"  Sample {idx}: {seq.id[:40]:40} | Length: {seq_len:8,} | Midpoint: {mid_point:8,}")
                 print("=" * 70)
-                print(f"Average sequence length: {sum(len(s) for s in self._data) / len(self._data):,.0f}")
+                # Calculate average sequence length
+                total_length = 0
+                count = 0
+                for seq in self._data:
+                    total_length += len(seq)
+                    count += 1
+                avg_length = total_length / count if count > 0 else 0
+                print(f"Average sequence length: {avg_length:,.0f}")
                 print()
         
         elif format.lower() == 'gff3':
