@@ -21,13 +21,8 @@ Options:
   -m, --mem         Memory per node          (default: $MEM)
   -t, --time        Walltime                 (default: $TIME)
       --vram        VRAM constraint, e.g. 80g -> --constraint=vram80g
-      --extra       Extra salloc options (quoted string)
+      --extra       Extra srun options (quoted string)
   -h, --help        Show this help message
-
-Examples:
-  $0
-  $0 -g 2 -m 80g -t 24:00:00 --vram 80g
-  $0 --extra "--cpus-per-task=8"
 USAGE
 }
 
@@ -55,45 +50,29 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Build salloc command
-SALLOC_CMD=(salloc
+SRUN_CMD=(srun
   --partition="$PARTITION"
   --gres="gpu:${GPUS}"
   --mem="$MEM"
   --time="$TIME"
+  --pty bash
 )
 
 if [[ -n "$VRAM" ]]; then
-  SALLOC_CMD+=(--constraint="vram${VRAM}")
+  SRUN_CMD+=(--constraint="vram${VRAM}")
 fi
 
 if [[ -n "$EXTRA_OPTS" ]]; then
   # shellcheck disable=SC2206
   EXTRA_ARR=($EXTRA_OPTS)
-  SALLOC_CMD+=("${EXTRA_ARR[@]}")
+  SRUN_CMD+=("${EXTRA_ARR[@]}")
 fi
 
-echo "Requesting allocation with:"
-printf '  %q ' "${SALLOC_CMD[@]}"
+echo "Requesting interactive GPU shell with:"
+printf '  %q ' "${SRUN_CMD[@]}"
 echo
 echo
 
-# Precompute CUDA_VISIBLE_DEVICES string based on #GPUs
-CUDA_DEVICES=""
-if [[ "$GPUS" -gt 0 ]]; then
-  # 0,1,2,...,(GPUS-1)
-  CUDA_DEVICES=$(seq -s, 0 "$((GPUS - 1))")
-fi
-
-# Start interactive allocation; inside, grab node and SSH into it
-"${SALLOC_CMD[@]}" <<EOF
-echo "Allocated on node(s): \$SLURM_NODELIST"
-
-HOST=\${SLURMD_NODENAME:-\${SLURM_NODELIST%%,*}}
-echo "Connecting to host: \$HOST"
-echo
-
-ssh -t "\$HOST" 'export CUDA_VISIBLE_DEVICES='"$CUDA_DEVICES"'; \
-  echo "CUDA_VISIBLE_DEVICES=\$CUDA_VISIBLE_DEVICES"; \
-  exec bash'
-EOF
+# This will block until a GPU node is available,
+# then drop you into a shell on that node.
+"${SRUN_CMD[@]}"
