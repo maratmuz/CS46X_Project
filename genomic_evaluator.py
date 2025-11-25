@@ -49,7 +49,6 @@ class GenomicEvaluator:
 
             model_types = run.model_types
             eval_mode = run.eval.mode
-            repitions = run.eval.repitions
 
             log_dir = out_root / f"run_{run_idx}" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -58,21 +57,23 @@ class GenomicEvaluator:
             data_format = run.data.format
             gff_path = run.data.get('gff_path', None)
 
-            try:
-                eval_tests = run.eval[f'{eval_mode}_tests']
-            except KeyError:
-                # gene_pred mode doesn't require eval_tests
-                if eval_mode != 'gene_pred':
-                    raise ValueError(f"Could not find any defined tests in the config file, check the desired format and try again.")
-                eval_tests = None
-            
-            # Handle gene_pred mode separately
+            # Handle gene_pred mode separately (doesn't need repitions or eval_tests)
             if eval_mode == 'gene_pred':
                 self._run_gene_pred_evaluation(
-                    run, model_types, eval_tests, data_path, data_format,
+                    run, model_types, None, data_path, data_format,
                     out_root, run_idx, log_dir
                 )
                 continue
+            
+            # For seq_pred mode, get repitions and eval_tests
+            repitions = run.eval.get('repitions', None)
+            if repitions is None:
+                raise ValueError(f"Missing required 'repitions' key for {eval_mode} mode in config.")
+            
+            try:
+                eval_tests = run.eval[f'{eval_mode}_tests']
+            except KeyError:
+                raise ValueError(f"Could not find required '{eval_mode}_tests' in the config file, check the desired format and try again.")
 
             self._data_loader.load(
                 path=data_path,
