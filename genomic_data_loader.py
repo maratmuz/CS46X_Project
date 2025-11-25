@@ -388,12 +388,15 @@ class GenomicDataLoader:
         if not self._genes:
             raise RuntimeError("No genes loaded. Load a GFF file first.")
         
-        # Normalize chromosomes input (handle string or list)
+        # Normalize chromosomes input (handle string, list, or OmegaConf ListConfig)
         if chromosomes is not None:
             if isinstance(chromosomes, str):
                 chromosomes = [chromosomes]
-            elif not isinstance(chromosomes, list):
-                raise ValueError(f"chromosomes must be a string, list, or None, got {type(chromosomes)}")
+            elif hasattr(chromosomes, '__iter__') and not isinstance(chromosomes, (str, bytes)):
+                # Convert iterable (list, ListConfig, etc.) to list
+                chromosomes = list(chromosomes)
+            else:
+                raise ValueError(f"chromosomes must be a string, iterable (list), or None, got {type(chromosomes)}")
         
         # Filter by chromosomes if specified
         filtered_genes = self._genes
