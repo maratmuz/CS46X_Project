@@ -222,37 +222,47 @@ class GenomicDataLoader:
                 # Process CDS features
                 elif feature_type == 'CDS':
                     parent_id = attributes.get('Parent', None)
-                    gene_id = attributes.get('ID', parent_id)
+                    cds_id = attributes.get('ID', None)
                     
-                    # If no parent, create gene from CDS coordinates
-                    if parent_id is None:
-                        gene_id = gene_id or f"{seq_id}_{start}_{end}"
-                        if gene_id not in genes_dict:
-                            genes_dict[gene_id] = GeneAnnotation(
-                                seq_id=seq_id,
-                                start=start,
-                                end=end,
-                                strand=strand,
-                                gene_id=gene_id,
-                                cds_features=[]
-                            )
-                            cds_by_gene[gene_id] = []
+                    # Handle comma-separated Parent values (take first)
+                    if parent_id and ',' in parent_id:
+                        parent_id = parent_id.split(',')[0].strip()
                     
-                    # Add CDS to gene (or create gene if missing)
-                    if gene_id in genes_dict:
-                        cds_by_gene[gene_id].append(CDSFeature(start=start, end=end, phase=phase))
-                    elif parent_id and parent_id in genes_dict:
-                        cds_by_gene[parent_id].append(CDSFeature(start=start, end=end, phase=phase))
+                    # Find the gene ID that this CDS belongs to
+                    target_gene_id = None
+                    
+                    # Try to match via parent_id first
+                    if parent_id and parent_id in genes_dict:
+                        target_gene_id = parent_id
+                    elif parent_id:
+                        # Parent might be a transcript/mRNA ID - use it as gene ID if not found
+                        # (We'll create the gene entry below)
+                        target_gene_id = parent_id
+                    elif cds_id and cds_id in genes_dict:
+                        # Use CDS ID if it matches an existing gene
+                        target_gene_id = cds_id
                     else:
-                        # Create gene from CDS
-                        genes_dict[gene_id] = GeneAnnotation(
+                        # Create new gene ID from CDS
+                        target_gene_id = cds_id or f"{seq_id}_{start}_{end}"
+                    
+                    # Ensure target_gene_id exists in genes_dict
+                    if target_gene_id not in genes_dict:
+                        # Create gene from CDS coordinates
+                        genes_dict[target_gene_id] = GeneAnnotation(
                             seq_id=seq_id,
                             start=start,
                             end=end,
                             strand=strand,
-                            gene_id=gene_id,
-                            cds_features=[CDSFeature(start=start, end=end, phase=phase)]
+                            gene_id=target_gene_id,
+                            cds_features=[]
                         )
+                    
+                    # CRITICAL: Ensure cds_by_gene entry exists before appending
+                    if target_gene_id not in cds_by_gene:
+                        cds_by_gene[target_gene_id] = []
+                    
+                    # Add CDS to the gene
+                    cds_by_gene[target_gene_id].append(CDSFeature(start=start, end=end, phase=phase))
         
         # Associate CDS features with genes
         genes = []
