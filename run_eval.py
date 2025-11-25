@@ -20,16 +20,22 @@ def main():
     torch.cuda.manual_seed(SEED)
     torch.cuda.manual_seed_all(SEED)  # For multi-GPU
 
-    seq_pred_cfg_1 = 'configs/eval/custom_eval_1.yaml'
-    # seq_pred_cfg_1 = 'configs/eval/presets/seq_pred_1.yaml'
-    # seq_pred_cfg_1 = 'configs/eval/seq_pred_2.yaml'
+    # Gene prediction mode (paper-accurate protein recovery evaluation)
+    gene_pred_cfg = 'configs/eval/gene_pred_example.yaml'
+    
+    # Alternative configs:
+    # seq_pred_cfg_1 = 'configs/eval/custom_eval_1.yaml'  # Sequence prediction mode
     # seq_pred_cfg_2 = 'configs/eval/custom_eval_2.yaml'  # Midpoint mode, varying pred_len
 
     evaluator = GenomicEvaluator()
 
-    evaluator.run(seq_pred_cfg_1)
+    evaluator.run(gene_pred_cfg)
 
-    print('\nEvaluation finished, results saved to "output/eval/results_<timestamp>".\n')
+    print('\nGene prediction evaluation finished!')
+    print('Results saved to "output/eval/results_<timestamp>/"')
+    print('  - avg_results.csv: Average protein recovery per gene')
+    print('  - avg_results_by_chromosome.csv: Average protein recovery per chromosome')
+    print('  - full_results/: Detailed results for each gene\n')
 
 if __name__ == '__main__':
     main()
