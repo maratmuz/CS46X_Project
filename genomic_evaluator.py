@@ -283,27 +283,56 @@ class GenomicEvaluator:
         full_dir.mkdir(parents=True, exist_ok=True)
 
         # Separate chromosome-level and gene-level results
+        # Also separate expected_min and model_contribution metrics
         gene_results = {}
         chromosome_results = {}
+        expected_min_results = {}
+        model_contribution_results = {}
         
         for model, tests in results.items():
             gene_results[model] = {}
             chromosome_results[model] = {}
+            expected_min_results[model] = {}
+            model_contribution_results[model] = {}
+            
             for test_label, vals in tests.items():
                 if test_label.startswith('Chromosome_'):
                     chromosome_results[model][test_label] = vals
+                elif test_label.endswith('_expected_min'):
+                    # Extract gene ID from label like "Gene_AT1G01010_expected_min"
+                    gene_id = test_label.replace('Gene_', '').replace('_expected_min', '')
+                    expected_min_results[model][gene_id] = vals
+                elif test_label.endswith('_model_contribution'):
+                    # Extract gene ID from label like "Gene_AT1G01010_model_contribution"
+                    gene_id = test_label.replace('Gene_', '').replace('_model_contribution', '')
+                    model_contribution_results[model][gene_id] = vals
                 else:
                     gene_results[model][test_label] = vals
 
-        # Average results table (gene-level)
-        if gene_results:
-            df_avg = pd.DataFrame({
-                model: {
-                    test: (sum(vals) / len(vals) if vals else float('nan'))
-                    for test, vals in tests.items()
-                }
-                for model, tests in gene_results.items()
-            })
+        # Average results table (gene-level) - includes actual recovery, expected_min, and model_contribution
+        if gene_results or expected_min_results or model_contribution_results:
+            # Build comprehensive results dict with all metrics
+            all_gene_metrics = {}
+            for model in gene_results.keys():
+                all_gene_metrics[model] = {}
+                # Add actual recovery metrics
+                for test_label, vals in gene_results[model].items():
+                    if test_label.startswith('Gene_'):
+                        gene_id = test_label.replace('Gene_', '')
+                        all_gene_metrics[model][f"{gene_id}_recovery"] = sum(vals) / len(vals) if vals else float('nan')
+                        
+                        # Add expected_min if available
+                        if gene_id in expected_min_results.get(model, {}):
+                            expected_vals = expected_min_results[model][gene_id]
+                            all_gene_metrics[model][f"{gene_id}_expected_min"] = sum(expected_vals) / len(expected_vals) if expected_vals else float('nan')
+                        
+                        # Add model_contribution if available
+                        if gene_id in model_contribution_results.get(model, {}):
+                            contrib_vals = model_contribution_results[model][gene_id]
+                            all_gene_metrics[model][f"{gene_id}_model_contribution"] = sum(contrib_vals) / len(contrib_vals) if contrib_vals else float('nan')
+            
+            # Create DataFrame from all metrics
+            df_avg = pd.DataFrame(all_gene_metrics).T
             df_avg.to_csv(base / "avg_results.csv", index=True)
 
         # Chromosome-level average results table
