@@ -412,7 +412,7 @@ class GenomicDataLoader:
         print("=" * 70)
         print()
 
-    def initialize_gene_evaluation(self, num_genes=None, chromosomes=None):
+    def initialize_gene_evaluation(self, num_genes=None, chromosomes=None, min_cds_length=None):
         """
         Initialize gene evaluation by selecting genes from the loaded GFF3 data.
         
@@ -422,6 +422,8 @@ class GenomicDataLoader:
                          - List: ['Chr1', 'Chr2']
                          - String: 'Chr1' (single chromosome)
                          - None: uses all chromosomes
+            min_cds_length: Minimum CDS length required (genes shorter than this will be filtered out).
+                           Typically set to seed length (500 for prokaryotes, 1000 for eukaryotes)
         """
         if not self._genes:
             raise RuntimeError("No genes loaded. Load a GFF file first.")
@@ -474,6 +476,26 @@ class GenomicDataLoader:
                     f"Available chromosomes: {available_chromosomes}"
                 )
         
+        # Filter by minimum CDS length if specified
+        genes_before_length_filter = len(filtered_genes)
+        genes_filtered_out = 0
+        if min_cds_length is not None:
+            filtered_genes_with_cds = []
+            for gene in filtered_genes:
+                # Calculate total CDS length by summing all CDS feature lengths
+                total_cds_length = sum(cds.end - cds.start for cds in gene.cds_features)
+                if total_cds_length > min_cds_length:
+                    filtered_genes_with_cds.append(gene)
+            
+            filtered_genes = filtered_genes_with_cds
+            genes_filtered_out = genes_before_length_filter - len(filtered_genes)
+            
+            if not filtered_genes:
+                raise ValueError(
+                    f"No genes found with CDS length > {min_cds_length} bp "
+                    f"(after chromosome filtering). {genes_filtered_out} genes were too short."
+                )
+        
         # Select subset if num_genes specified
         if num_genes is None:
             self._selected_genes = filtered_genes
@@ -492,6 +514,10 @@ class GenomicDataLoader:
         print(f"  Total genes selected: {len(self._selected_genes)}")
         if chromosomes is not None:
             print(f"  Requested chromosomes: {chromosomes}")
+        if min_cds_length is not None:
+            print(f"  Minimum CDS length filter: > {min_cds_length:,} bp")
+            if genes_filtered_out > 0:
+                print(f"  Genes filtered out (too short): {genes_filtered_out}")
         print()
         
         self._gene_index = 0

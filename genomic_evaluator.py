@@ -386,9 +386,13 @@ class GenomicEvaluator:
         print(f"Models to evaluate: {len(model_types)} ({', '.join(model_types)})")
         print(f"{'='*80}\n")
         
+        # Determine minimum CDS length based on organism type (seed length requirement)
+        min_cds_length = 500 if organism_type.lower() in ['prokaryote', 'archaea', 'yeast'] else 1000
+        
         self._data_loader.initialize_gene_evaluation(
             num_genes=num_genes,
-            chromosomes=chromosomes
+            chromosomes=chromosomes,
+            min_cds_length=min_cds_length
         )
         
         num_genes_to_process = len(self._data_loader._selected_genes)
