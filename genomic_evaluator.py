@@ -459,16 +459,33 @@ class GenomicEvaluator:
                     # reading frame (starts at codon boundary), so we translate from frame 0.
                     cds_phase = 0  # Properly assembled CDS sequences start at frame 0
                     
+                    # Calculate expected minimum recovery from seed portion
+                    # The seed (500-1000 bp) is in the prompt and will always match perfectly,
+                    # so minimum recovery = (seed_protein_length / full_protein_length) * 100
+                    # We translate both with to_stop=True to match the actual recovery calculation
+                    cds_seed_len = 500 if organism_type.lower() in ['prokaryote', 'archaea', 'yeast'] else 1000
+                    cds_seed_dna = full_cds[:cds_seed_len]  # First part of CDS (used as seed)
+                    try:
+                        seed_protein = Seq(cds_seed_dna).translate(to_stop=True)
+                        full_protein = Seq(full_cds).translate(to_stop=True)
+                        if len(full_protein) > 0:
+                            expected_min_recovery = (len(seed_protein) / len(full_protein)) * 100
+                        else:
+                            expected_min_recovery = 0.0
+                    except Exception as e:
+                        expected_min_recovery = None
+                        print(f"  Warning: Could not calculate expected minimum recovery: {e}")
+                    
                     # Calculate protein recovery for each sample
                     protein_recoveries = []
-                    for gen_seq in generated_samples:
+                    for gen_idx, gen_seq in enumerate(generated_samples):
                         # Combine prompt CDS seed with generated sequence to get complete CDS
-                        cds_seed_len = 500 if organism_type.lower() in ['prokaryote', 'archaea', 'yeast'] else 1000
                         cds_seed = prompt[-cds_seed_len:]  # CDS seed from prompt
                         completed_cds = cds_seed + gen_seq[:len(target_cds_seq)]
                         
                         # Translate and calculate protein recovery using correct reading frame
                         # Extracted CDS sequences are in frame 0, so phase=0 is correct
+                        print(f"Translating generated sample {gen_idx + 1}/{len(generated_samples)}, gene index {gene_idx}, gene {gene_ann.gene_id} ({gene_ann.seq_id})")
                         recovery = self._calculate_protein_recovery(completed_cds, full_cds, phase=cds_phase)
                         if recovery is not None:
                             protein_recoveries.append(recovery)
@@ -484,13 +501,30 @@ class GenomicEvaluator:
                         avg_recovery = sum(protein_recoveries) / len(protein_recoveries)
                         results[model_type][gene_label].append(avg_recovery)
                         
+                        # Store expected minimum recovery and model contribution as separate metrics
+                        if expected_min_recovery is not None:
+                            expected_min_label = f"Gene_{gene_ann.gene_id}_expected_min"
+                            if expected_min_label not in results[model_type]:
+                                results[model_type][expected_min_label] = []
+                            results[model_type][expected_min_label].append(expected_min_recovery)
+                            
+                            model_contribution = avg_recovery - expected_min_recovery
+                            contribution_label = f"Gene_{gene_ann.gene_id}_model_contribution"
+                            if contribution_label not in results[model_type]:
+                                results[model_type][contribution_label] = []
+                            results[model_type][contribution_label].append(model_contribution)
+                            
+                            print(f"  Average protein recovery: {avg_recovery:.2f}% (from {len(protein_recoveries)} samples)")
+                            print(f"  Expected minimum (from seed): {expected_min_recovery:.2f}%")
+                            print(f"  Model contribution: {model_contribution:+.2f}% (recovery above seed baseline)")
+                        else:
+                            print(f"  Average protein recovery: {avg_recovery:.2f}% (from {len(protein_recoveries)} samples)")
+                        
                         # Chromosome-level results
                         chrom_label = f"Chromosome_{chromosome_id}"
                         if chrom_label not in results[model_type]:
                             results[model_type][chrom_label] = []
                         results[model_type][chrom_label].append(avg_recovery)
-                        
-                        print(f"  Average protein recovery: {avg_recovery:.2f}% (from {len(protein_recoveries)} samples)")
                         
                         # Save results after each gene to prevent data loss if cancelled
                         self._save_results(results, out_root, run_idx)
