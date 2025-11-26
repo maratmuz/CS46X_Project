@@ -6,7 +6,7 @@ runs:
       - evo2_40b_base
     eval:
       mode: 'gene_pred'
-      num_genes: 50  # Number of genes to evaluate (None for all genes in selected chromosomes)
+      num_genes: 5  # Number of genes to evaluate (None for all genes in selected chromosomes)
       samples_per_prompt: 10  # Number of samples per gene
     data:
       format: 'fasta'  # Can be 'fasta' or 'gff3'

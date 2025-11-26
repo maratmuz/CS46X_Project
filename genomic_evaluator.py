@@ -371,29 +371,59 @@ class GenomicEvaluator:
             verbose=True
         )
         
+        # Get total number of genes available
+        total_genes_available = len(self._data_loader._genes) if self._data_loader._genes else 0
+        
         # Initialize gene evaluation with chromosome filtering
+        print(f"\n{'='*80}")
+        print("INITIALIZING GENE EVALUATION")
+        print(f"{'='*80}")
+        print(f"Organism type: {organism_type}")
+        print(f"Chromosomes: {chromosomes if chromosomes else 'All'}")
+        print(f"Total genes available: {total_genes_available:,}")
+        print(f"Number of genes to evaluate: {num_genes if num_genes else 'All available'}")
+        print(f"Samples per prompt: {samples_per_prompt}")
+        print(f"Models to evaluate: {len(model_types)} ({', '.join(model_types)})")
+        print(f"{'='*80}\n")
+        
         self._data_loader.initialize_gene_evaluation(
             num_genes=num_genes,
             chromosomes=chromosomes
         )
         
+        num_genes_to_process = len(self._data_loader._selected_genes)
+        print(f"Selected {num_genes_to_process:,} genes for evaluation (out of {total_genes_available:,} available)\n")
+        
         for model_idx, model_type in enumerate(model_types):
+            print(f"\n{'='*80}")
+            print(f"Model: {model_idx + 1}/{len(model_types)} | {model_type}")
+            print(f"{'='*80}\n")
+            
             with open(log_dir / "model_load.log", "a") as log_f, \
                 contextlib.redirect_stdout(log_f), \
                 contextlib.redirect_stderr(log_f):
+                print(f"[{model_type}] Loading model...")
                 model = self._load_model(model_type)
             
+            print(f"[{model_type}] Model loaded successfully")
             results[model_type] = {}
             
             # Process each gene
-            num_genes_to_process = len(self._data_loader._selected_genes)
+            print(f"[{model_type}] Processing {num_genes_to_process} genes...\n")
             
             for gene_idx in range(num_genes_to_process):
                 try:
+                    # Get current gene info for error reporting (before calling get_gene_prompt)
+                    current_gene = self._data_loader._selected_genes[gene_idx] if gene_idx < len(self._data_loader._selected_genes) else None
+                    gene_id_for_error = current_gene.gene_id if current_gene else f"index_{gene_idx}"
+                    
                     # Get gene prompt and target
                     prompt, target_cds_seq, full_cds, gene_ann = self._data_loader.get_gene_prompt(
                         organism_type=organism_type
                     )
+                    
+                    print(f"[{model_type}] Gene {gene_idx + 1}/{num_genes_to_process}: {gene_ann.gene_id} ({gene_ann.seq_id})")
+                    print(f"  Prompt length: {len(prompt):,} bp, Target CDS length: {len(target_cds_seq):,} bp")
                     
                     # Generate samples
                     generated_samples = []
@@ -455,25 +485,39 @@ class GenomicEvaluator:
                         if chrom_label not in results[model_type]:
                             results[model_type][chrom_label] = []
                         results[model_type][chrom_label].append(avg_recovery)
+                        
+                        print(f"  Average protein recovery: {avg_recovery:.2f}% (from {len(protein_recoveries)} samples)")
+                        
+                        # Save results after each gene to prevent data loss if cancelled
+                        self._save_results(results, out_root, run_idx)
+                    else:
+                        print(f"  No valid protein recoveries calculated (translation/alignment failed)")
                     
-                    # Progress logging
+                    # Progress summary every 10 genes
                     if (gene_idx + 1) % 10 == 0:
-                        print(f"Processed {gene_idx + 1}/{num_genes_to_process} genes for {model_type}")
+                        print(f"\n[{model_type}] Progress: {gene_idx + 1}/{num_genes_to_process} genes completed\n")
                 
                 except Exception as e:
                     err_file = log_dir / "errors.log"
                     with open(err_file, "a") as ef:
-                        error = f"[ERROR] Gene processing failed for {model_type}, gene_idx {gene_idx}: {e}\n"
+                        # Try to get gene_id from the exception or use current gene
+                        gene_id = gene_id_for_error if 'gene_id_for_error' in locals() else f"index_{gene_idx}"
+                        error = f"[ERROR] Gene processing failed for {model_type}, gene_idx {gene_idx} (gene_id: {gene_id}): {e}\n"
                         ef.write(error)
+                        print(error)  # Also print to console for visibility
                     continue
             
             # Cleanup
+            print(f"\n[{model_type}] Completed. Cleaning up model...")
             del model
             gc.collect()
             torch.cuda.empty_cache()
+            print(f"[{model_type}] Model cleanup complete\n")
         
-        # Save results
+        # Final save of all results
+        print("Saving final results...")
         self._save_results(results, out_root, run_idx)
+        print("Results saved successfully!")
 
     def _calculate_protein_recovery(self, generated_cds, natural_cds, phase=None):
         """

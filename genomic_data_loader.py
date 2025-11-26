@@ -179,6 +179,7 @@ class GenomicDataLoader:
         """
         genes_dict = {}  # gene_id -> GeneAnnotation
         cds_by_gene = {}  # gene_id -> list of CDS features
+        mrna_to_gene = {}  # mRNA/transcript ID -> gene ID (for TAIR10 structure)
         
         with open(gff_path, 'r') as f:
             for line in f:
@@ -219,6 +220,19 @@ class GenomicDataLoader:
                     if gene_id not in cds_by_gene:
                         cds_by_gene[gene_id] = []
                 
+                # Process mRNA/transcript features (map to genes)
+                elif feature_type in ['mRNA', 'transcript']:
+                    mrna_id = attributes.get('ID', None)
+                    parent_gene_id = attributes.get('Parent', None)
+                    
+                    if mrna_id and parent_gene_id:
+                        # Map mRNA ID to gene ID
+                        mrna_to_gene[mrna_id] = parent_gene_id
+                        # Handle comma-separated Parent values
+                        if ',' in parent_gene_id:
+                            parent_gene_id = parent_gene_id.split(',')[0].strip()
+                            mrna_to_gene[mrna_id] = parent_gene_id
+                
                 # Process CDS features
                 elif feature_type == 'CDS':
                     parent_id = attributes.get('Parent', None)
@@ -231,19 +245,43 @@ class GenomicDataLoader:
                     # Find the gene ID that this CDS belongs to
                     target_gene_id = None
                     
-                    # Try to match via parent_id first
-                    if parent_id and parent_id in genes_dict:
-                        target_gene_id = parent_id
-                    elif parent_id:
-                        # Parent might be a transcript/mRNA ID - use it as gene ID if not found
-                        # (We'll create the gene entry below)
-                        target_gene_id = parent_id
-                    elif cds_id and cds_id in genes_dict:
-                        # Use CDS ID if it matches an existing gene
-                        target_gene_id = cds_id
-                    else:
-                        # Create new gene ID from CDS
-                        target_gene_id = cds_id or f"{seq_id}_{start}_{end}"
+                    if parent_id:
+                        # Check if parent is a gene ID
+                        if parent_id in genes_dict:
+                            target_gene_id = parent_id
+                        # Check if parent is an mRNA/transcript ID (e.g., AT1G09040.1)
+                        elif parent_id in mrna_to_gene:
+                            target_gene_id = mrna_to_gene[parent_id]
+                            # Ensure gene exists
+                            if target_gene_id not in genes_dict:
+                                # Gene should exist, but create it if missing
+                                genes_dict[target_gene_id] = GeneAnnotation(
+                                    seq_id=seq_id,
+                                    start=start,
+                                    end=end,
+                                    strand=strand,
+                                    gene_id=target_gene_id,
+                                    cds_features=[]
+                                )
+                        else:
+                            # Parent not found - might be a new gene or transcript without gene parent
+                            # Try to extract gene ID by removing suffix (e.g., AT1G09040.1 -> AT1G09040)
+                            if '.' in parent_id:
+                                potential_gene_id = parent_id.rsplit('.', 1)[0]
+                                if potential_gene_id in genes_dict:
+                                    target_gene_id = potential_gene_id
+                                else:
+                                    # Use parent as gene ID (will create gene below)
+                                    target_gene_id = parent_id
+                            else:
+                                target_gene_id = parent_id
+                    
+                    # Fallback: use CDS ID or create new
+                    if target_gene_id is None:
+                        if cds_id and cds_id in genes_dict:
+                            target_gene_id = cds_id
+                        else:
+                            target_gene_id = cds_id or f"{seq_id}_{start}_{end}"
                     
                     # Ensure target_gene_id exists in genes_dict
                     if target_gene_id not in genes_dict:
