@@ -21,9 +21,14 @@ pip install -e models/Evo2
 
 conda install -y -c conda-forge nccl
 
+pip install ninja packaging
+
 pip3 install --no-build-isolation transformer_engine[pytorch]
 
-pip install --no-cache-dir flash-attn
+pip install --no-build-isolation flash-attn
+
+# pip3 install --no-build-isolation transformer_engine[pytorch]
+# pip install --no-cache-dir flash-attn
 
 pip install biopython bcbio-gff omegaconf pandas
 
