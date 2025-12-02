@@ -397,7 +397,7 @@ class GenomicDataLoader:
     def _print_loaded_data(self, fasta_path, gff_path):
         """Print information about loaded FASTA and GFF data."""
         print(f"\nLoaded {len(self._data)} sequences from {fasta_path}")
-        print(f"Loaded {len(self._genes)} CDS features from {gff_path}")
+        print(f"Loaded {len(self._genes)} genes from {gff_path}")
         print("=" * 70)
         
         # Group genes by sequence/chromosome
@@ -408,7 +408,7 @@ class GenomicDataLoader:
         for idx, seq in enumerate(self._data, 1):
             seq_len = len(seq)
             gene_count = seq_gene_counts.get(seq.id, 0)
-            print(f"  Sequence {idx}: {seq.id[:40]:40} | Length: {seq_len:8,} | CDS features: {gene_count:4}")
+            print(f"  Sequence {idx}: {seq.id[:40]:40} | Length: {seq_len:8,} | Genes: {gene_count:4}")
         print("=" * 70)
         print()
 

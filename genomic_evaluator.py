@@ -380,8 +380,8 @@ class GenomicEvaluator:
         print(f"{'='*80}")
         print(f"Organism type: {organism_type}")
         print(f"Chromosomes: {chromosomes if chromosomes else 'All'}")
-        print(f"Total genes available: {total_genes_available:,}")
-        print(f"Number of genes to evaluate: {num_genes if num_genes else 'All available'}")
+        print(f"Total genes available (across all chromosomes): {total_genes_available:,}")
+        print(f"Number of genes to evaluate: {num_genes if num_genes else 'All available (after filtering)'}")
         print(f"Samples per prompt: {samples_per_prompt}")
         print(f"Models to evaluate: {len(model_types)} ({', '.join(model_types)})")
         print(f"{'='*80}\n")
@@ -608,10 +608,14 @@ class GenomicEvaluator:
             generated_protein = max(generated_proteins, key=lambda x: len(x[1]))[1]
             natural_protein = max(natural_proteins, key=lambda x: len(x[1]))[1]
             
-            # Perform global alignment
-            alignments = pairwise2.align.globalxx(
+            # Perform global alignment with specific scoring parameters
+            alignments = pairwise2.align.globalms(
                 generated_protein,
-                natural_protein
+                natural_protein,
+                match=2,
+                mismatch=-1,
+                open=-0.5,
+                extend=-0.1
             )
             
             if not alignments:
@@ -625,16 +629,17 @@ class GenomicEvaluator:
             print(pairwise2.format_alignment(*best_alignment))
             print("==========================\n")
             
-            # Calculate matches over aligned region
-            matches = sum(a == b and a != '-' and b != '-' 
-                         for a, b in zip(aligned_gen, aligned_nat))
-            aligned_length = sum(1 for a, b in zip(aligned_gen, aligned_nat) 
-                                if a != '-' or b != '-')
+            # Calculate matches: only count positions where both sequences have non-gap characters
+            matches = sum(a == b for a, b in zip(aligned_gen, aligned_nat) 
+                         if a != '-' and b != '-')
             
-            if aligned_length == 0:
+            # Similarity is calculated as matches / target sequence length (not alignment length)
+            target_length = len(natural_protein)
+            
+            if target_length == 0:
                 return 0.0
             
-            recovery = (matches / aligned_length) * 100
+            recovery = (matches / target_length) * 100
             return recovery
             
         except Exception as e:
