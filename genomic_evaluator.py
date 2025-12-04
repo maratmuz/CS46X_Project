@@ -427,7 +427,12 @@ class GenomicEvaluator:
                     )
                     
                     print(f"[{model_type}] Gene {gene_idx + 1}/{num_genes_to_process}: {gene_ann.gene_id} ({gene_ann.seq_id})")
-                    print(f"  Prompt length: {len(prompt):,} bp, Target CDS length: {len(target_cds_seq):,} bp")
+                    print(f"  Full CDS length: {len(full_cds):,} bp, Target CDS length: {len(target_cds_seq):,} bp")
+                    print(f"  Prompt length: {len(prompt):,} bp (includes upstream + seed)")
+                    
+                    # Verify target length meets minimum requirement (should be filtered out, but check for safety)
+                    if len(target_cds_seq) < 3:
+                        print(f"  WARNING: Target length ({len(target_cds_seq)} bp) is less than 3 bp! This should have been filtered out.")
                     
                     # Generate samples
                     generated_samples = []
@@ -465,16 +470,51 @@ class GenomicEvaluator:
                     # We translate both with to_stop=True to match the actual recovery calculation
                     cds_seed_len = 500 if organism_type.lower() in ['prokaryote', 'archaea', 'yeast'] else 1000
                     cds_seed_dna = full_cds[:cds_seed_len]  # First part of CDS (used as seed)
+                    
+                    # Debug: Check for stop codons in seed
+                    seed_seq_obj = Seq(cds_seed_dna)
+                    
                     try:
-                        seed_protein = Seq(cds_seed_dna).translate(to_stop=True)
+                        seed_protein = seed_seq_obj.translate(to_stop=True)
                         full_protein = Seq(full_cds).translate(to_stop=True)
+                        
                         if len(full_protein) > 0:
                             expected_min_recovery = (len(seed_protein) / len(full_protein)) * 100
+                            
+                            # Debug output for cases where expected recovery is suspiciously high
+                            if expected_min_recovery >= 95.0:
+                                print(f"  DEBUG: Seed length: {len(cds_seed_dna)} bp, Full CDS length: {len(full_cds)} bp")
+                                print(f"  DEBUG: Target length: {len(target_cds_seq)} bp")
+                                print(f"  DEBUG: Seed protein length: {len(seed_protein)} aa, Full protein length: {len(full_protein)} aa")
+                                print(f"  DEBUG: Seed contains stop codon: {seed_has_stop}")
+                                print(f"  DEBUG: Expected minimum recovery is higher than 95%: {expected_min_recovery:.2f}%")
+
+                                stop_codons = ['TAA', 'TAG', 'TGA']
+                                seed_has_stop = any(codon in seed_seq_obj for codon in stop_codons)
+
+                                if seed_has_stop:
+                                    # Find where stop codon is
+                                    for frame in range(3):
+                                        for i in range(frame, len(cds_seed_dna) - 2, 3):
+                                            codon = str(seed_seq_obj[i:i+3])
+                                            if codon in stop_codons:
+                                                print(f"  DEBUG: Stop codon '{codon}' found at position {i} (frame {frame}) in seed")
+                                                break
                         else:
                             expected_min_recovery = 0.0
                     except Exception as e:
                         expected_min_recovery = None
                         print(f"  Warning: Could not calculate expected minimum recovery: {e}")
+                    
+                    # Skip genes where seed already covers entire protein (expected recovery = 100%)
+                    # With min_target_length >= 3 bp filtering, 100% should not be mathematically possible,
+                    # but we keep this check for safety/to catch annotation issues
+                    max_allowed_expected_recovery = run.eval.get('max_expected_min_recovery', 100.0)
+                    if expected_min_recovery is not None and expected_min_recovery >= max_allowed_expected_recovery:
+                        print(f"  Skipping gene {gene_ann.gene_id}: Expected minimum recovery is {expected_min_recovery:.2f}% "
+                              f"(exceeds maximum allowed {max_allowed_expected_recovery}%). "
+                              f"No meaningful evaluation possible.")
+                        continue
                     
                     # Calculate protein recovery for each sample
                     protein_recoveries = []
@@ -482,6 +522,12 @@ class GenomicEvaluator:
                         # Combine prompt CDS seed with generated sequence to get complete CDS
                         cds_seed = prompt[-cds_seed_len:]  # CDS seed from prompt
                         completed_cds = cds_seed + gen_seq[:len(target_cds_seq)]
+                        
+                        # Verify that the seed from prompt matches the seed we calculated earlier
+                        if cds_seed != cds_seed_dna:
+                            print(f"  WARNING: Seed mismatch! Prompt seed length: {len(cds_seed)}, Calculated seed length: {len(cds_seed_dna)}")
+                            print(f"  Prompt seed starts with: {cds_seed[:50]}")
+                            print(f"  Calculated seed starts with: {cds_seed_dna[:50]}")
                         
                         # Translate and calculate protein recovery using correct reading frame
                         # Extracted CDS sequences are in frame 0, so phase=0 is correct

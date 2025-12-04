@@ -412,7 +412,8 @@ class GenomicDataLoader:
         print("=" * 70)
         print()
 
-    def initialize_gene_evaluation(self, num_genes=None, chromosomes=None, min_cds_length=None):
+    def initialize_gene_evaluation(self, num_genes=None, chromosomes=None, min_cds_length=None, 
+                                   min_target_length=None, max_expected_min_recovery=None):
         """
         Initialize gene evaluation by selecting genes from the loaded GFF3 data.
         
@@ -424,6 +425,12 @@ class GenomicDataLoader:
                          - None: uses all chromosomes
             min_cds_length: Minimum CDS length required (genes shorter than this will be filtered out).
                            Typically set to seed length (500 for prokaryotes, 1000 for eukaryotes)
+            min_target_length: Minimum target sequence length (CDS after seed) required.
+                              Filters out genes where target is too short (avoids guaranteed 100% recovery).
+                              Default: 3 bp (prevents 1-2 bp targets that can't form complete codons)
+            max_expected_min_recovery: Maximum allowed expected minimum recovery percentage.
+                                     Filters out genes where seed already covers most of protein.
+                                     Default: 98.0 (exclude genes with >98% expected recovery)
         """
         if not self._genes:
             raise RuntimeError("No genes loaded. Load a GFF file first.")
@@ -478,22 +485,35 @@ class GenomicDataLoader:
         
         # Filter by minimum CDS length if specified
         genes_before_length_filter = len(filtered_genes)
-        genes_filtered_out = 0
+        genes_filtered_out_by_length = 0
+        genes_filtered_out_by_target = 0
         if min_cds_length is not None:
             filtered_genes_with_cds = []
             for gene in filtered_genes:
                 # Calculate total CDS length by summing all CDS feature lengths
                 total_cds_length = sum(cds.end - cds.start for cds in gene.cds_features)
                 if total_cds_length > min_cds_length:
-                    filtered_genes_with_cds.append(gene)
+                    # Additional check: ensure target sequence (after seed) is at least 3 bp
+                    # This prevents guaranteed 100% recovery from 1-2 bp targets (which can't form complete codons)
+                    target_length = total_cds_length - min_cds_length
+                    min_target = min_target_length if min_target_length is not None else 3
+                    if target_length >= min_target:
+                        filtered_genes_with_cds.append(gene)
+                    else:
+                        genes_filtered_out_by_target += 1
+                else:
+                    genes_filtered_out_by_length += 1
             
             filtered_genes = filtered_genes_with_cds
             genes_filtered_out = genes_before_length_filter - len(filtered_genes)
             
             if not filtered_genes:
+                min_target_display = min_target_length if min_target_length is not None else 3
                 raise ValueError(
-                    f"No genes found with CDS length > {min_cds_length} bp "
-                    f"(after chromosome filtering). {genes_filtered_out} genes were too short."
+                    f"No genes found with CDS length > {min_cds_length} bp AND target length >= {min_target_display} bp "
+                    f"(after chromosome filtering). "
+                    f"{genes_filtered_out_by_length} genes were too short, "
+                    f"{genes_filtered_out_by_target} genes had target sequence too short."
                 )
         
         # Select subset if num_genes specified
@@ -516,8 +536,11 @@ class GenomicDataLoader:
             print(f"  Requested chromosomes: {chromosomes}")
         if min_cds_length is not None:
             print(f"  Minimum CDS length filter: > {min_cds_length:,} bp")
-            if genes_filtered_out > 0:
-                print(f"  Genes filtered out (too short): {genes_filtered_out}")
+            print(f"  Minimum target length filter: >= {min_target_length if min_target_length is not None else 3:,} bp")
+            if genes_filtered_out_by_length > 0:
+                print(f"  Genes filtered out (CDS too short): {genes_filtered_out_by_length}")
+            if genes_filtered_out_by_target > 0:
+                print(f"  Genes filtered out (target too short): {genes_filtered_out_by_target}")
         print()
         
         self._gene_index = 0
