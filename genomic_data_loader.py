@@ -628,30 +628,12 @@ class GenomicDataLoader:
             sorted_cds = sorted(gene.cds_features, key=lambda x: x.start, reverse=True)
         
         cds_parts = []
-        for idx, cds in enumerate(sorted_cds):
+        for cds in sorted_cds:
             cds_seq = seq_str[cds.start:cds.end]
-            
-            # Phase trimming happens AFTER reverse complementing so it applies to the 5' end
             if gene.strand == '-':
                 cds_seq = str(Seq(cds_seq).reverse_complement())
-            
-            # Parse phase: 0, 1, 2, or '.' (unknown/not applicable)
-            try:
-                phase = int(cds.phase) if str(cds.phase) != '.' else 0
-            except (ValueError, TypeError, AttributeError):
-                phase = 0
-            
-            if phase > 0:
-                if len(cds_seq) > phase:
-                    # Trim the first 'phase' nucleotides from the 5' end to maintain codon alignment
-                    cds_seq = cds_seq[phase:]
-                else:
-                    # Edge case: CDS shorter than phase (shouldn't happen, but handle gracefully)
-                    print(f"Warning: CDS {cds.start}-{cds.end} has phase {phase} but only {len(cds_seq)} bases. "
-                          f"CDS too short for phase. Keeping all bases.")
-            
             cds_parts.append(cds_seq)
-        
+
         full_cds_seq = ''.join(cds_parts)
         
         # Validate that full CDS is a multiple of 3 (proper codon alignment)
@@ -662,9 +644,6 @@ class GenomicDataLoader:
             )
         
         # Extract CDS seed (first part of CDS sequence)
-        # Paper: "the first 500 bp (prokaryotes) or 1000 bp (eukaryotes) of the gene sequence"
-        # Note: 500 and 1000 are not multiples of 3, so the seed may end mid-codon
-        # This is acceptable - the model will generate from where the seed ends
         cds_seed = full_cds_seq[:gene_seed_len]
         
         # Construct prompt: upstream + CDS seed (first part of CDS/gene sequence)
