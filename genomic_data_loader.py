@@ -654,7 +654,17 @@ class GenomicDataLoader:
         
         full_cds_seq = ''.join(cds_parts)
         
+        # Validate that full CDS is a multiple of 3 (proper codon alignment)
+        if len(full_cds_seq) % 3 != 0:
+            raise ValueError(
+                f"Gene {gene.gene_id}: Full CDS length ({len(full_cds_seq)} bp) is not a multiple of 3. "
+                f"This indicates a problem with CDS construction or phase handling."
+            )
+        
         # Extract CDS seed (first part of CDS sequence)
+        # Paper: "the first 500 bp (prokaryotes) or 1000 bp (eukaryotes) of the gene sequence"
+        # Note: 500 and 1000 are not multiples of 3, so the seed may end mid-codon
+        # This is acceptable - the model will generate from where the seed ends
         cds_seed = full_cds_seq[:gene_seed_len]
         
         # Construct prompt: upstream + CDS seed (first part of CDS/gene sequence)

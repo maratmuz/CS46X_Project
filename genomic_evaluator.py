@@ -510,16 +510,39 @@ class GenomicEvaluator:
                                 
                                 if seed_has_stop:
                                     # Find where stop codon is (show details)
-                                    for frame in range(3):
-                                        found_stop = False
-                                        for i in range(frame, len(cds_seed_dna) - 2, 3):
-                                            codon = str(seed_seq_obj[i:i+3])
-                                            if codon in stop_codons:
-                                                print(f"  DEBUG: Stop codon '{codon}' found at position {i} (frame {frame}) in seed")
-                                                found_stop = True
-                                                break
-                                        if found_stop:
+                                    print(f"\n  === DEBUGGING STOP CODON IN SEED ===")
+                                    print(f"  Full CDS sequence (full):\n{full_cds}")
+                                    print(f"  CDS seed (full):\n{cds_seed_dna}")
+                                    print(f"  Full CDS length: {len(full_cds)} bp")
+                                    print(f"  CDS seed length: {len(cds_seed_dna)} bp")
+                                    print(f"  Target length: {len(target_cds_seq)} bp")
+                                    
+                                    # Check if seed is codon-aligned
+                                    if len(cds_seed_dna) % 3 != 0:
+                                        print(f"  WARNING: Seed length ({len(cds_seed_dna)} bp) is not a multiple of 3!")
+                                    else:
+                                        print(f"  Seed length is codon-aligned (multiple of 3): ✓")
+                                    
+                                    # Find stop codon in frame 0 (the actual coding frame)
+                                    stop_pos = None
+                                    stop_codon_found = None
+                                    for i in range(0, len(cds_seed_dna) - 2, 3):
+                                        codon = str(seed_seq_obj[i:i+3])
+                                        if codon in stop_codons:
+                                            stop_pos = i
+                                            stop_codon_found = codon
+                                            print(f"  Stop codon '{codon}' found at position {i} (frame 0) in seed")
+                                            print(f"  Context around stop codon: ...{cds_seed_dna[max(0,i-30):i]}[{codon}]{cds_seed_dna[i+3:min(len(cds_seed_dna),i+33)]}...")
                                             break
+                                    
+                                    # Check if stop codon exists in full CDS at same position
+                                    if stop_pos is not None:
+                                        full_seq_obj = Seq(full_cds)
+                                        if stop_pos < len(full_cds) - 2:
+                                            full_codon = str(full_seq_obj[stop_pos:stop_pos+3])
+                                            print(f"  Full CDS at same position {stop_pos}: '{full_codon}' (should match '{stop_codon_found}')")
+                                    
+                                    print(f"  === END DEBUG ===\n")
                         else:
                             expected_min_recovery = 0.0
                     except Exception as e:
@@ -548,6 +571,17 @@ class GenomicEvaluator:
                             print(f"  WARNING: Seed mismatch! Prompt seed length: {len(cds_seed)}, Calculated seed length: {len(cds_seed_dna)}")
                             print(f"  Prompt seed starts with: {cds_seed[:50]}")
                             print(f"  Calculated seed starts with: {cds_seed_dna[:50]}")
+                            # Use the calculated seed for consistency
+                            cds_seed = cds_seed_dna
+                        
+                        # Debug output if stop codon was found in seed
+                        if seed_has_stop and gen_idx < 2:  # Only show first 2 samples to avoid too much output
+                            print(f"\n  === DEBUGGING GENERATED SEQUENCE {gen_idx + 1} ===")
+                            print(f"  Generated sequence (full):\n{gen_seq}")
+                            print(f"  Generated sequence length: {len(gen_seq)} bp")
+                            print(f"  Completed CDS (full):\n{completed_cds}")
+                            print(f"  Completed CDS length: {len(completed_cds)} bp")
+                            print(f"  === END GENERATED SEQUENCE DEBUG ===\n")
                         
                         # Translate and calculate protein recovery using correct reading frame
                         # Extracted CDS sequences are in frame 0, so phase=0 is correct
