@@ -421,6 +421,10 @@ class GenomicEvaluator:
                     current_gene = self._data_loader._selected_genes[gene_idx] if gene_idx < len(self._data_loader._selected_genes) else None
                     gene_id_for_error = current_gene.gene_id if current_gene else f"index_{gene_idx}"
                     
+                    # Initialize variables at the very start to avoid scope issues
+                    seed_has_stop = False
+                    expected_min_recovery = None
+                    
                     # Get gene prompt and target
                     prompt, target_cds_seq, full_cds, gene_ann = self._data_loader.get_gene_prompt(
                         organism_type=organism_type
@@ -471,8 +475,23 @@ class GenomicEvaluator:
                     cds_seed_len = 500 if organism_type.lower() in ['prokaryote', 'archaea', 'yeast'] else 1000
                     cds_seed_dna = full_cds[:cds_seed_len]  # First part of CDS (used as seed)
                     
-                    # Debug: Check for stop codons in seed
+                    # Initialize sequence objects and check for stop codons
                     seed_seq_obj = Seq(cds_seed_dna)
+                    stop_codons = ['TAA', 'TAG', 'TGA']
+                    
+                    # Check if seed contains any stop codons (in any reading frame)
+                    try:
+                        for frame in range(3):
+                            for i in range(frame, len(cds_seed_dna) - 2, 3):
+                                codon = str(seed_seq_obj[i:i+3])
+                                if codon in stop_codons:
+                                    seed_has_stop = True
+                                    break
+                            if seed_has_stop:
+                                break
+                    except Exception:
+                        # If stop codon check fails, assume no stop codon
+                        seed_has_stop = False
                     
                     try:
                         seed_protein = seed_seq_obj.translate(to_stop=True)
@@ -488,18 +507,19 @@ class GenomicEvaluator:
                                 print(f"  DEBUG: Seed protein length: {len(seed_protein)} aa, Full protein length: {len(full_protein)} aa")
                                 print(f"  DEBUG: Seed contains stop codon: {seed_has_stop}")
                                 print(f"  DEBUG: Expected minimum recovery is higher than 95%: {expected_min_recovery:.2f}%")
-
-                                stop_codons = ['TAA', 'TAG', 'TGA']
-                                seed_has_stop = any(codon in seed_seq_obj for codon in stop_codons)
-
+                                
                                 if seed_has_stop:
-                                    # Find where stop codon is
+                                    # Find where stop codon is (show details)
                                     for frame in range(3):
+                                        found_stop = False
                                         for i in range(frame, len(cds_seed_dna) - 2, 3):
                                             codon = str(seed_seq_obj[i:i+3])
                                             if codon in stop_codons:
                                                 print(f"  DEBUG: Stop codon '{codon}' found at position {i} (frame {frame}) in seed")
+                                                found_stop = True
                                                 break
+                                        if found_stop:
+                                            break
                         else:
                             expected_min_recovery = 0.0
                     except Exception as e:
