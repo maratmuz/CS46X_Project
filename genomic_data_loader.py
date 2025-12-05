@@ -168,18 +168,23 @@ class GenomicDataLoader:
     def _load_gff3_annotations(self, gff_path, verbose=False):
         """
         Load only GFF3 annotations without sequences.
-        Extracts gene features (whole genes) and associates CDS features for translation.
+        Extracts transcript (mRNA) features and associates CDS features for translation.
+        Each transcript is treated as a separate unit to avoid merging CDS from different
+        isoforms into chimeric sequences.
         
         Args:
             gff_path: Path to GFF3 file
             verbose: Print detailed information
         
         Returns:
-            List of GeneAnnotation tuples with associated CDS features
+            List of GeneAnnotation tuples (one per transcript) with associated CDS features.
+            Note: 'gene_id' field actually contains the transcript ID.
         """
-        genes_dict = {}  # gene_id -> GeneAnnotation
-        cds_by_gene = {}  # gene_id -> list of CDS features
-        mrna_to_gene = {}  # mRNA/transcript ID -> gene ID (for TAIR10 structure)
+        # Use transcript (mRNA) as the primary unit, not gene
+        # This prevents merging CDS from different isoforms into chimeras
+        transcripts_dict = {}  # transcript_id -> GeneAnnotation (using transcript ID as key)
+        cds_by_transcript = {}  # transcript_id -> list of CDS features
+        mrna_to_gene = {}  # mRNA/transcript ID -> gene ID (metadata only, for reference)
         
         with open(gff_path, 'r') as f:
             for line in f:
@@ -206,34 +211,32 @@ class GenomicDataLoader:
                         key, value = attr.split('=', 1)
                         attributes[key] = value
                 
-                # Process gene features
-                if feature_type == 'gene':
-                    gene_id = attributes.get('ID', f"{seq_id}_{start}_{end}")
-                    genes_dict[gene_id] = GeneAnnotation(
-                        seq_id=seq_id,
-                        start=start,
-                        end=end,
-                        strand=strand,
-                        gene_id=gene_id,
-                        cds_features=[]  # Will be populated from CDS features
-                    )
-                    if gene_id not in cds_by_gene:
-                        cds_by_gene[gene_id] = []
-                
-                # Process mRNA/transcript features (map to genes)
-                elif feature_type in ['mRNA', 'transcript']:
+                # Process mRNA/transcript features - create GeneAnnotation entry for each transcript
+                if feature_type in ['mRNA', 'transcript']:
                     mrna_id = attributes.get('ID', None)
                     parent_gene_id = attributes.get('Parent', None)
                     
-                    if mrna_id and parent_gene_id:
-                        # Map mRNA ID to gene ID
-                        mrna_to_gene[mrna_id] = parent_gene_id
-                        # Handle comma-separated Parent values
-                        if ',' in parent_gene_id:
-                            parent_gene_id = parent_gene_id.split(',')[0].strip()
+                    if mrna_id:
+                        # Store gene ID mapping for metadata/reference
+                        if parent_gene_id:
+                            # Handle comma-separated Parent values
+                            if ',' in parent_gene_id:
+                                parent_gene_id = parent_gene_id.split(',')[0].strip()
                             mrna_to_gene[mrna_id] = parent_gene_id
+                        
+                        # Create GeneAnnotation entry keyed by transcript ID
+                        transcripts_dict[mrna_id] = GeneAnnotation(
+                            seq_id=seq_id,
+                            start=start,
+                            end=end,
+                            strand=strand,
+                            gene_id=mrna_id,  # Use transcript ID as the "gene_id"
+                            cds_features=[]  # Will be populated from CDS features
+                        )
+                        if mrna_id not in cds_by_transcript:
+                            cds_by_transcript[mrna_id] = []
                 
-                # Process CDS features
+                # Process CDS features - attach directly to transcript (mRNA)
                 elif feature_type == 'CDS':
                     parent_id = attributes.get('Parent', None)
                     cds_id = attributes.get('ID', None)
@@ -242,78 +245,64 @@ class GenomicDataLoader:
                     if parent_id and ',' in parent_id:
                         parent_id = parent_id.split(',')[0].strip()
                     
-                    # Find the gene ID that this CDS belongs to
-                    target_gene_id = None
+                    # Find the transcript ID that this CDS belongs to
+                    target_transcript_id = None
                     
                     if parent_id:
-                        # Check if parent is a gene ID
-                        if parent_id in genes_dict:
-                            target_gene_id = parent_id
-                        # Check if parent is an mRNA/transcript ID (e.g., AT1G09040.1)
-                        elif parent_id in mrna_to_gene:
-                            target_gene_id = mrna_to_gene[parent_id]
-                            # Ensure gene exists
-                            if target_gene_id not in genes_dict:
-                                # Gene should exist, but create it if missing
-                                genes_dict[target_gene_id] = GeneAnnotation(
-                                    seq_id=seq_id,
-                                    start=start,
-                                    end=end,
-                                    strand=strand,
-                                    gene_id=target_gene_id,
-                                    cds_features=[]
-                                )
+                        # Check if parent is a transcript (mRNA) ID - use it directly
+                        if parent_id in transcripts_dict:
+                            target_transcript_id = parent_id
                         else:
-                            # Parent not found - might be a new gene or transcript without gene parent
-                            # Try to extract gene ID by removing suffix (e.g., AT1G09040.1 -> AT1G09040)
-                            if '.' in parent_id:
-                                potential_gene_id = parent_id.rsplit('.', 1)[0]
-                                if potential_gene_id in genes_dict:
-                                    target_gene_id = potential_gene_id
-                                else:
-                                    # Use parent as gene ID (will create gene below)
-                                    target_gene_id = parent_id
+                            # Parent might be a gene ID. Check if there are transcripts for this gene.
+                            associated_transcripts = [tid for tid, gid in mrna_to_gene.items() 
+                                                     if gid == parent_id]
+                            if len(associated_transcripts) == 1:
+                                # Single transcript for this gene - use it
+                                target_transcript_id = associated_transcripts[0]
+                            elif len(associated_transcripts) > 1:
+                                # Multiple transcripts exist - can't determine which one this CDS belongs to
+                                # Create a transcript entry using the gene ID as fallback
+                                # (This handles edge cases but ideally CDS should reference transcript)
+                                target_transcript_id = parent_id
                             else:
-                                target_gene_id = parent_id
-                    
-                    # Fallback: use CDS ID or create new
-                    if target_gene_id is None:
-                        if cds_id and cds_id in genes_dict:
-                            target_gene_id = cds_id
+                                # No transcripts found for this parent ID
+                                # This means: it's a gene ID with no isoforms (no mRNA/transcript features)
+                                # Treat the gene ID as the transcript ID (gene without isoforms = single transcript)
+                                target_transcript_id = parent_id
+                    else:
+                        # No parent ID - fallback to CDS ID or create new
+                        if cds_id:
+                            target_transcript_id = cds_id
                         else:
-                            target_gene_id = cds_id or f"{seq_id}_{start}_{end}"
+                            target_transcript_id = f"{seq_id}_{start}_{end}"
                     
-                    # Ensure target_gene_id exists in genes_dict
-                    if target_gene_id not in genes_dict:
-                        # Create gene from CDS coordinates
-                        genes_dict[target_gene_id] = GeneAnnotation(
+                    # Ensure transcript entry exists (creates it for genes without isoforms)
+                    if target_transcript_id not in transcripts_dict:
+                        transcripts_dict[target_transcript_id] = GeneAnnotation(
                             seq_id=seq_id,
                             start=start,
                             end=end,
                             strand=strand,
-                            gene_id=target_gene_id,
+                            gene_id=target_transcript_id,
                             cds_features=[]
                         )
+                        cds_by_transcript[target_transcript_id] = []
                     
-                    # CRITICAL: Ensure cds_by_gene entry exists before appending
-                    if target_gene_id not in cds_by_gene:
-                        cds_by_gene[target_gene_id] = []
-                    
-                    # Add CDS to the gene
-                    cds_by_gene[target_gene_id].append(CDSFeature(start=start, end=end, phase=phase))
+                    # Add CDS to the transcript
+                    cds_by_transcript[target_transcript_id].append(CDSFeature(start=start, end=end, phase=phase))
         
-        # Associate CDS features with genes
+        # Associate CDS features with transcripts
         genes = []
-        for gene_id, gene_ann in genes_dict.items():
-            cds_list = cds_by_gene.get(gene_id, gene_ann.cds_features)
+        for transcript_id, transcript_ann in transcripts_dict.items():
+            cds_list = cds_by_transcript.get(transcript_id, transcript_ann.cds_features)
             # Sort CDS features by start position
             cds_list.sort(key=lambda x: x.start)
             genes.append(GeneAnnotation(
-                seq_id=gene_ann.seq_id,
-                start=gene_ann.start,
-                end=gene_ann.end,
-                strand=gene_ann.strand,
-                gene_id=gene_ann.gene_id,
+                seq_id=transcript_ann.seq_id,
+                start=transcript_ann.start,
+                end=transcript_ann.end,
+                strand=transcript_ann.strand,
+                gene_id=transcript_ann.gene_id,  # This is actually the transcript ID
                 cds_features=cds_list
             ))
         
