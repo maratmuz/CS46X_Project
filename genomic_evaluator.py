@@ -707,6 +707,9 @@ class GenomicEvaluator:
             # Use the longest translations (or the one matching the phase)
             generated_protein = max(generated_proteins, key=lambda x: len(x[1]))[1]
             natural_protein = max(natural_proteins, key=lambda x: len(x[1]))[1]
+
+            print(f"Generated protein: {generated_protein}")
+            print(f"Natural protein: {natural_protein}")
             
             # Perform global alignment with specific scoring parameters
             alignments = pairwise2.align.globalms(
