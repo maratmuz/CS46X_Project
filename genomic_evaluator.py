@@ -6,6 +6,8 @@ from pathlib import Path
 from datetime import datetime
 from omegaconf import OmegaConf
 from genomic_data_loader import GenomicDataLoader
+from Bio.Seq import Seq
+from Bio import pairwise2
 
 from evo2 import Evo2
 
@@ -27,6 +29,7 @@ class GenomicEvaluator:
 
         self.supported_eval_modes = [
             'seq_pred',
+            'gene_pred',
         ]
 
         # self._model_manager = GenomicModelManager()
@@ -46,22 +49,36 @@ class GenomicEvaluator:
 
             model_types = run.model_types
             eval_mode = run.eval.mode
-            repitions = run.eval.repitions
 
             log_dir = out_root / f"run_{run_idx}" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
 
+            data_path = run.data.path
+            data_format = run.data.format
+            gff_path = run.data.get('gff_path', None)
+
+            # Handle gene_pred mode separately (doesn't need repitions or eval_tests)
+            if eval_mode == 'gene_pred':
+                self._run_gene_pred_evaluation(
+                    run, model_types, None, data_path, data_format,
+                    out_root, run_idx, log_dir
+                )
+                continue
+            
+            # For seq_pred mode, get repitions and eval_tests
+            repitions = run.eval.get('repitions', None)
+            if repitions is None:
+                raise ValueError(f"Missing required 'repitions' key for {eval_mode} mode in config.")
+            
             try:
                 eval_tests = run.eval[f'{eval_mode}_tests']
             except KeyError:
-                raise ValueError(f"Could not find any defined tests in the config file, check the desired format and try again.")
-
-            data_path = run.data.path
-            data_format = run.data.format
+                raise ValueError(f"Could not find required '{eval_mode}_tests' in the config file, check the desired format and try again.")
 
             self._data_loader.load(
                 path=data_path,
                 format=data_format,
+                gff_path=gff_path,
                 verbose=True,
             )
 
@@ -137,7 +154,7 @@ class GenomicEvaluator:
                 print(
                     f'{"Model:":<11}1 / 1 | {model_type:<20}\n'
                     f'{"Test:":<11}1 / 1 | {test_label:<20}\n'
-                    f'{"Repetition:":<11}{rep_idx + 1:>2} / {repetitions:<2}\n'
+                    f'{"Repetition:":<11}{rep_idx + 1:>2} / {repitions:<2}\n'
                 )
 
                 del model
@@ -265,25 +282,469 @@ class GenomicEvaluator:
         full_dir = base / "full_results"
         full_dir.mkdir(parents=True, exist_ok=True)
 
-        # average results table
-        df_avg = pd.DataFrame({
-            model: {
-                test: (sum(vals) / len(vals) if vals else float('nan'))
-                for test, vals in tests.items()
-            }
-            for model, tests in results.items()
-        })
-        df_avg.to_csv(base / "avg_results.csv", index=True)  # CSV now
+        # Separate chromosome-level and gene-level results
+        gene_results = {}
+        chromosome_results = {}
+        
+        for model, tests in results.items():
+            gene_results[model] = {}
+            chromosome_results[model] = {}
+            for test_label, vals in tests.items():
+                if test_label.startswith('Chromosome_'):
+                    chromosome_results[model][test_label] = vals
+                else:
+                    gene_results[model][test_label] = vals
 
-        # per-test tables
-        if not results:
+        # Average results table (gene-level) - includes recovery, expected_min, and model_contribution
+        if gene_results:
+            df_avg = pd.DataFrame({
+                model: {
+                    test: (sum(vals) / len(vals) if vals else float('nan'))
+                    for test, vals in tests.items()
+                }
+                for model, tests in gene_results.items()
+            })
+            df_avg.to_csv(base / "avg_results.csv", index=True)
+
+        # Chromosome-level average results table
+        if chromosome_results:
+            df_chrom_avg = pd.DataFrame({
+                model: {
+                    test: (sum(vals) / len(vals) if vals else float('nan'))
+                    for test, vals in tests.items()
+                }
+                for model, tests in chromosome_results.items()
+            })
+            df_chrom_avg.to_csv(base / "avg_results_by_chromosome.csv", index=True)
+            
+            # Print chromosome averages to console
+            print("\n" + "=" * 80)
+            print("AVERAGE PROTEIN RECOVERY BY CHROMOSOME")
+            print("=" * 80)
+            for model in df_chrom_avg.columns:
+                print(f"\n{model}:")
+                for chrom in df_chrom_avg.index:
+                    avg = df_chrom_avg.loc[chrom, model]
+                    if pd.notna(avg):
+                        chrom_name = chrom.replace('Chromosome_', '')
+                        print(f"  {chrom_name}: {avg:.2f}%")
+            print("=" * 80 + "\n")
+
+        # per-test tables (gene-level)
+        if not gene_results:
             return
-        all_tests = sorted({t for tests in results.values() for t in tests})
+        all_tests = sorted({t for tests in gene_results.values() for t in tests})
 
         for i, test_label in enumerate(all_tests, start=1):
             df_full = pd.DataFrame({
                 model: pd.Series(tests.get(test_label, []))
-                for model, tests in results.items()
+                for model, tests in gene_results.items()
             })
             df_full.index.name = "rep"
             df_full.to_csv(full_dir / f"test_{i}.csv", index=True)
+
+    def _run_gene_pred_evaluation(self, run, model_types, eval_tests, data_path, 
+                                   data_format, out_root, run_idx, log_dir):
+        """
+        Run gene prediction evaluation matching the paper methodology.
+        
+        For each gene:
+        - Build prompt: 1kb upstream + first 500/1000bp of CDS
+        - Generate 10 samples with temperature=0.7, top_k=4
+        - Translate to amino acids and align to natural protein
+        - Calculate percent protein recovery
+        """
+        results = {}
+        
+        # Get configuration parameters
+        organism_type = run.data.get('organism_type', 'prokaryote')
+        num_genes = run.eval.get('num_genes', None)
+        samples_per_prompt = run.eval.get('samples_per_prompt', 10)
+        chromosomes = run.data.get('chromosomes', None)  # List of chromosomes to evaluate
+        
+        # Load data
+        gff_path = run.data.get('gff_path', None)
+        self._data_loader.load(
+            path=data_path, 
+            format=data_format, 
+            gff_path=gff_path,
+            verbose=True
+        )
+        
+        # Get total number of genes available
+        total_genes_available = len(self._data_loader._genes) if self._data_loader._genes else 0
+        
+        # Initialize gene evaluation with chromosome filtering
+        print(f"\n{'='*80}")
+        print("INITIALIZING GENE EVALUATION")
+        print(f"{'='*80}")
+        print(f"Organism type: {organism_type}")
+        print(f"Chromosomes: {chromosomes if chromosomes else 'All'}")
+        print(f"Total genes available (across all chromosomes): {total_genes_available:,}")
+        print(f"Number of genes to evaluate: {num_genes if num_genes else 'All available (after filtering)'}")
+        print(f"Samples per prompt: {samples_per_prompt}")
+        print(f"Models to evaluate: {len(model_types)} ({', '.join(model_types)})")
+        print(f"{'='*80}\n")
+        
+        # Determine minimum CDS length based on organism type (seed length requirement)
+        min_cds_length = 500 if organism_type.lower() in ['prokaryote', 'archaea', 'yeast'] else 1000
+        
+        self._data_loader.initialize_gene_evaluation(
+            num_genes=num_genes,
+            chromosomes=chromosomes,
+            min_cds_length=min_cds_length
+        )
+        
+        num_genes_to_process = len(self._data_loader._selected_genes)
+        print(f"Selected {num_genes_to_process:,} genes for evaluation (out of {total_genes_available:,} available)\n")
+        
+        for model_idx, model_type in enumerate(model_types):
+            print(f"\n{'='*80}")
+            print(f"Model: {model_idx + 1}/{len(model_types)} | {model_type}")
+            print(f"{'='*80}\n")
+            
+            with open(log_dir / "model_load.log", "a") as log_f, \
+                contextlib.redirect_stdout(log_f), \
+                contextlib.redirect_stderr(log_f):
+                print(f"[{model_type}] Loading model...")
+                model = self._load_model(model_type)
+            
+            print(f"[{model_type}] Model loaded successfully")
+            results[model_type] = {}
+            
+            # Process each gene
+            print(f"[{model_type}] Processing {num_genes_to_process} genes...\n")
+            
+            for gene_idx in range(num_genes_to_process):
+                try:
+                    # Get current gene info for error reporting (before calling get_gene_prompt)
+                    current_gene = self._data_loader._selected_genes[gene_idx] if gene_idx < len(self._data_loader._selected_genes) else None
+                    gene_id_for_error = current_gene.gene_id if current_gene else f"index_{gene_idx}"
+                    
+                    # Initialize variables at the very start to avoid scope issues
+                    seed_has_stop = False
+                    expected_min_recovery = None
+                    
+                    # Get gene prompt and target
+                    prompt, target_cds_seq, full_cds, gene_ann = self._data_loader.get_gene_prompt(
+                        organism_type=organism_type
+                    )
+                    
+                    print(f"[{model_type}] Gene {gene_idx + 1}/{num_genes_to_process}: {gene_ann.gene_id} ({gene_ann.seq_id})")
+                    print(f"  Full CDS length: {len(full_cds):,} bp, Target CDS length: {len(target_cds_seq):,} bp")
+                    print(f"  Prompt length: {len(prompt):,} bp (includes upstream + seed)")
+                    
+                    # Verify target length meets minimum requirement (should be filtered out, but check for safety)
+                    if len(target_cds_seq) < 3:
+                        print(f"  WARNING: Target length ({len(target_cds_seq)} bp) is less than 3 bp! This should have been filtered out.")
+                    
+                    # Generate samples
+                    generated_samples = []
+                    for sample_idx in range(samples_per_prompt):
+                        try:
+                            with torch.inference_mode():
+                                output = model.generate(
+                                    prompt_seqs=[prompt],
+                                    n_tokens=len(target_cds_seq),  # Generate remainder of CDS sequence
+                                    temperature=0.7,
+                                    top_k=4,
+                                    top_p=1.0,
+                                )
+                                generated_samples.append(output.sequences[0])
+                        except Exception as e:
+                            err_file = log_dir / "errors.log"
+                            with open(err_file, "a") as ef:
+                                error = f"[ERROR] Generation failed for {model_type}, gene {gene_ann.gene_id}, sample {sample_idx}: {e}\n"
+                                ef.write(error)
+                            continue
+                    
+                    if not generated_samples:
+                        continue
+                    
+                    # Use frame 0 for translation
+                    # Note: The CDS sequence extraction properly handles GFF3 phase information
+                    # by trimming phase bases from each CDS feature to preserve codon boundaries
+                    # across exon junctions. The resulting full_cds_seq is already in the correct
+                    # reading frame (starts at codon boundary), so we translate from frame 0.
+                    cds_phase = 0  # Properly assembled CDS sequences start at frame 0
+                    
+                    # Calculate expected minimum recovery from seed portion
+                    # The seed (500-1000 bp) is in the prompt and will always match perfectly,
+                    # so minimum recovery = (seed_protein_length / full_protein_length) * 100
+                    # We translate both with to_stop=True to match the actual recovery calculation
+                    cds_seed_len = 500 if organism_type.lower() in ['prokaryote', 'archaea', 'yeast'] else 1000
+                    cds_seed_dna = full_cds[:cds_seed_len]  # First part of CDS (used as seed)
+                    
+                    # Initialize sequence objects and check for stop codons
+                    seed_seq_obj = Seq(cds_seed_dna)
+                    stop_codons = ['TAA', 'TAG', 'TGA']
+                    
+                    # Check if seed contains any stop codons (in any reading frame)
+                    try:
+                        for frame in range(3):
+                            for i in range(frame, len(cds_seed_dna) - 2, 3):
+                                codon = str(seed_seq_obj[i:i+3])
+                                if codon in stop_codons:
+                                    seed_has_stop = True
+                                    break
+                            if seed_has_stop:
+                                break
+                    except Exception:
+                        # If stop codon check fails, assume no stop codon
+                        seed_has_stop = False
+                    
+                    try:
+                        seed_protein = seed_seq_obj.translate(to_stop=True)
+                        full_protein = Seq(full_cds).translate(to_stop=True)
+                        
+                        if len(full_protein) > 0:
+                            expected_min_recovery = (len(seed_protein) / len(full_protein)) * 100
+                            
+                            # Debug output for cases where expected recovery is suspiciously high
+                            if expected_min_recovery >= 95.0:
+                                print(f"  DEBUG: Seed length: {len(cds_seed_dna)} bp, Full CDS length: {len(full_cds)} bp")
+                                print(f"  DEBUG: Target length: {len(target_cds_seq)} bp")
+                                print(f"  DEBUG: Seed protein length: {len(seed_protein)} aa, Full protein length: {len(full_protein)} aa")
+                                print(f"  DEBUG: Seed contains stop codon: {seed_has_stop}")
+                                print(f"  DEBUG: Expected minimum recovery is higher than 95%: {expected_min_recovery:.2f}%")
+                                
+                                if seed_has_stop:
+                                    # Find where stop codon is (show details)
+                                    print(f"\n  === DEBUGGING STOP CODON IN SEED ===")
+                                    print(f"  Full CDS sequence (full):\n{full_cds}")
+                                    print(f"  CDS seed (full):\n{cds_seed_dna}")
+                                    print(f"  Full CDS length: {len(full_cds)} bp")
+                                    print(f"  CDS seed length: {len(cds_seed_dna)} bp")
+                                    print(f"  Target length: {len(target_cds_seq)} bp")
+                                    
+                                    # Check if seed is codon-aligned
+                                    if len(cds_seed_dna) % 3 != 0:
+                                        print(f"  WARNING: Seed length ({len(cds_seed_dna)} bp) is not a multiple of 3!")
+                                    else:
+                                        print(f"  Seed length is codon-aligned (multiple of 3): ✓")
+                                    
+                                    # Find stop codon in frame 0 (the actual coding frame)
+                                    stop_pos = None
+                                    stop_codon_found = None
+                                    for i in range(0, len(cds_seed_dna) - 2, 3):
+                                        codon = str(seed_seq_obj[i:i+3])
+                                        if codon in stop_codons:
+                                            stop_pos = i
+                                            stop_codon_found = codon
+                                            print(f"  Stop codon '{codon}' found at position {i} (frame 0) in seed")
+                                            print(f"  Context around stop codon: ...{cds_seed_dna[max(0,i-30):i]}[{codon}]{cds_seed_dna[i+3:min(len(cds_seed_dna),i+33)]}...")
+                                            break
+                                    
+                                    # Check if stop codon exists in full CDS at same position
+                                    if stop_pos is not None:
+                                        full_seq_obj = Seq(full_cds)
+                                        if stop_pos < len(full_cds) - 2:
+                                            full_codon = str(full_seq_obj[stop_pos:stop_pos+3])
+                                            print(f"  Full CDS at same position {stop_pos}: '{full_codon}' (should match '{stop_codon_found}')")
+                                    
+                                    print(f"  === END DEBUG ===\n")
+                        else:
+                            expected_min_recovery = 0.0
+                    except Exception as e:
+                        expected_min_recovery = None
+                        print(f"  Warning: Could not calculate expected minimum recovery: {e}")
+                    
+                    # Skip genes where seed already covers entire protein (expected recovery = 100%)
+                    # With min_target_length >= 3 bp filtering, 100% should not be mathematically possible,
+                    # but we keep this check for safety/to catch annotation issues
+                    max_allowed_expected_recovery = run.eval.get('max_expected_min_recovery', 100.0)
+                    if expected_min_recovery is not None and expected_min_recovery >= max_allowed_expected_recovery:
+                        print(f"  Skipping gene {gene_ann.gene_id}: Expected minimum recovery is {expected_min_recovery:.2f}% "
+                              f"(exceeds maximum allowed {max_allowed_expected_recovery}%). "
+                              f"No meaningful evaluation possible.")
+                        continue
+                    
+                    # Calculate protein recovery for each sample
+                    protein_recoveries = []
+                    for gen_idx, gen_seq in enumerate(generated_samples):
+                        # Combine prompt CDS seed with generated sequence to get complete CDS
+                        cds_seed = prompt[-cds_seed_len:]  # CDS seed from prompt
+                        completed_cds = cds_seed + gen_seq[:len(target_cds_seq)]
+                        
+                        # Verify that the seed from prompt matches the seed we calculated earlier
+                        if cds_seed != cds_seed_dna:
+                            print(f"  WARNING: Seed mismatch! Prompt seed length: {len(cds_seed)}, Calculated seed length: {len(cds_seed_dna)}")
+                            print(f"  Prompt seed starts with: {cds_seed[:50]}")
+                            print(f"  Calculated seed starts with: {cds_seed_dna[:50]}")
+                            # Use the calculated seed for consistency
+                            cds_seed = cds_seed_dna
+                        
+                        # Debug output if stop codon was found in seed
+                        if seed_has_stop and gen_idx < 2:  # Only show first 2 samples to avoid too much output
+                            print(f"\n  === DEBUGGING GENERATED SEQUENCE {gen_idx + 1} ===")
+                            print(f"  Generated sequence (full):\n{gen_seq}")
+                            print(f"  Generated sequence length: {len(gen_seq)} bp")
+                            print(f"  Completed CDS (full):\n{completed_cds}")
+                            print(f"  Completed CDS length: {len(completed_cds)} bp")
+                            print(f"  === END GENERATED SEQUENCE DEBUG ===\n")
+                        
+                        # Translate and calculate protein recovery using correct reading frame
+                        # Extracted CDS sequences are in frame 0, so phase=0 is correct
+                        print(f"Translating generated sample {gen_idx + 1}/{len(generated_samples)}, gene index {gene_idx}, gene {gene_ann.gene_id} ({gene_ann.seq_id})")
+                        recovery = self._calculate_protein_recovery(completed_cds, full_cds, phase=cds_phase)
+                        if recovery is not None:
+                            protein_recoveries.append(recovery)
+                    
+                    # Store results (average recovery across samples for this gene)
+                    if protein_recoveries:
+                        gene_label = f"Gene_{gene_ann.gene_id}"
+                        chromosome_id = gene_ann.seq_id
+                        
+                        # Gene-level results
+                        if gene_label not in results[model_type]:
+                            results[model_type][gene_label] = []
+                        avg_recovery = sum(protein_recoveries) / len(protein_recoveries)
+                        results[model_type][gene_label].append(avg_recovery)
+                        
+                        # Store expected minimum recovery and model contribution as separate metrics
+                        if expected_min_recovery is not None:
+                            expected_min_label = f"Gene_{gene_ann.gene_id}_expected_min"
+                            if expected_min_label not in results[model_type]:
+                                results[model_type][expected_min_label] = []
+                            results[model_type][expected_min_label].append(expected_min_recovery)
+                            
+                            model_contribution = avg_recovery - expected_min_recovery
+                            contribution_label = f"Gene_{gene_ann.gene_id}_model_contribution"
+                            if contribution_label not in results[model_type]:
+                                results[model_type][contribution_label] = []
+                            results[model_type][contribution_label].append(model_contribution)
+                            
+                            print(f"  Average protein recovery: {avg_recovery:.2f}% (from {len(protein_recoveries)} samples)")
+                            print(f"  Expected minimum (from seed): {expected_min_recovery:.2f}%")
+                            print(f"  Model contribution: {model_contribution:+.2f}% (recovery above seed baseline)")
+                        else:
+                            print(f"  Average protein recovery: {avg_recovery:.2f}% (from {len(protein_recoveries)} samples)")
+                        
+                        # Chromosome-level results
+                        chrom_label = f"Chromosome_{chromosome_id}"
+                        if chrom_label not in results[model_type]:
+                            results[model_type][chrom_label] = []
+                        results[model_type][chrom_label].append(avg_recovery)
+                        
+                        # Save results after each gene to prevent data loss if cancelled
+                        self._save_results(results, out_root, run_idx)
+                    else:
+                        print(f"  No valid protein recoveries calculated (translation/alignment failed)")
+                    
+                    # Progress summary every 10 genes
+                    if (gene_idx + 1) % 10 == 0:
+                        print(f"\n[{model_type}] Progress: {gene_idx + 1}/{num_genes_to_process} genes completed\n")
+                
+                except Exception as e:
+                    err_file = log_dir / "errors.log"
+                    with open(err_file, "a") as ef:
+                        # Try to get gene_id from the exception or use current gene
+                        gene_id = gene_id_for_error if 'gene_id_for_error' in locals() else f"index_{gene_idx}"
+                        error = f"[ERROR] Gene processing failed for {model_type}, gene_idx {gene_idx} (gene_id: {gene_id}): {e}\n"
+                        ef.write(error)
+                        print(error)  # Also print to console for visibility
+                    continue
+            
+            # Cleanup
+            print(f"\n[{model_type}] Completed. Cleaning up model...")
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(f"[{model_type}] Model cleanup complete\n")
+        
+        # Final save of all results
+        print("Saving final results...")
+        self._save_results(results, out_root, run_idx)
+        print("Results saved successfully!")
+
+    def _calculate_protein_recovery(self, generated_cds, natural_cds, phase=None):
+        """
+        Calculate percent protein recovery by:
+        1. Translating DNA sequences to amino acids using the correct reading frame (phase)
+        2. Aligning generated protein to natural protein
+        3. Calculating sequence identity over aligned region
+        
+        Args:
+            generated_cds: Generated CDS DNA sequence
+            natural_cds: Natural CDS DNA sequence (already correctly phased from GFF)
+            phase: Reading frame phase (0, 1, or 2) from GFF file. If None, tries all frames.
+        
+        Returns:
+            Percent protein recovery (0-100) or None if translation fails
+        """
+        try:
+            generated_seq = Seq(generated_cds)
+            natural_seq = Seq(natural_cds)
+            
+            # Use phase from GFF if available, otherwise try all frames
+            if phase is not None:
+                frames_to_try = [int(phase)]
+            else:
+                frames_to_try = [0, 1, 2]
+            
+            generated_proteins = []
+            natural_proteins = []
+            
+            for frame in frames_to_try:
+                try:
+                    # Translate from specified frame
+                    gen_prot = generated_seq[frame:].translate(to_stop=True)
+                    if len(gen_prot) > 0:
+                        generated_proteins.append((frame, str(gen_prot)))
+                except:
+                    pass
+                
+                try:
+                    nat_prot = natural_seq[frame:].translate(to_stop=True)
+                    if len(nat_prot) > 0:
+                        natural_proteins.append((frame, str(nat_prot)))
+                except:
+                    pass
+            
+            if not generated_proteins or not natural_proteins:
+                return None
+            
+            # Use the longest translations (or the one matching the phase)
+            generated_protein = max(generated_proteins, key=lambda x: len(x[1]))[1]
+            natural_protein = max(natural_proteins, key=lambda x: len(x[1]))[1]
+
+            print(f"Generated protein: {generated_protein}")
+            print(f"Natural protein: {natural_protein}")
+            
+            # Perform global alignment with specific scoring parameters
+            alignments = pairwise2.align.globalms(
+                generated_protein,
+                natural_protein,
+                match=2,
+                mismatch=-1,
+                open=-0.5,
+                extend=-0.1
+            )
+            
+            if not alignments:
+                return None
+            
+            best_alignment = alignments[0]
+            aligned_gen = best_alignment[0]  # seqA is first element of tuple
+            aligned_nat = best_alignment[1]  # seqB is second element of tuple
+
+            print("\n===== BEST ALIGNMENT =====")
+            print(pairwise2.format_alignment(*best_alignment))
+            print("==========================\n")
+            
+            # Calculate matches: only count positions where both sequences have non-gap characters
+            matches = sum(a == b for a, b in zip(aligned_gen, aligned_nat) 
+                         if a != '-' and b != '-')
+            
+            # Similarity is calculated as matches / target sequence length (not alignment length)
+            target_length = len(natural_protein)
+            
+            if target_length == 0:
+                return 0.0
+            
+            recovery = (matches / target_length) * 100
+            return recovery
+            
+        except Exception as e:
+            # Return None if translation/alignment fails
+            return None
