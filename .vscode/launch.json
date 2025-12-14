@@ -5,7 +5,7 @@
             "name": "Evaluation",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/run_eval.py",
+            "program": "${workspaceFolder}/scripts/eval/eval.py",
             "console": "integratedTerminal"
         },
         {

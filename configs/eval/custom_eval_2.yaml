@@ -8,7 +8,8 @@ runs:
       - evo2_40b_base
     eval:
       mode: 'seq_pred'
-      repitions: 4
+      repetitions: 4
+      read_mode: 'midpoint'
       seq_pred_tests:
         # Note: Using read_midpoint mode: seq_len is ignored, prompt is 50% of sequence
         test_1:
@@ -41,4 +42,3 @@ runs:
     data:
       format: 'fasta'
       path: 'shared/datasets/TAIR10_genome_release/TAIR10_chromosome_files/TAIR10_chr_all.fas'
-

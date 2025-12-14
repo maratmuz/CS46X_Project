@@ -4,11 +4,11 @@ runs:
       - evo2_1b_base
       - evo2_7b
       - evo2_7b_base
-      - evo2_40b
-      - evo2_40b_base
+      # - evo2_40b
+      # - evo2_40b_base
     eval:
       mode: 'seq_pred'
-      repitions: 4
+      repetitions: 4
       seq_pred_tests:
         test_1:
           seq_len: 32

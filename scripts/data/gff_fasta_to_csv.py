@@ -3,28 +3,22 @@
 """
 Create a CSV of annotated coding sequences from a genome FASTA and GFF3.
 
-Usage from CS46X_Project root:
-
-  python Marat/gff_fasta_to_csv.py
-
-Paths are hard coded below; edit FASTA_PATH, GFF3_PATH, and OUTPUT_PATH if needed.
+Usage from repo root:
+  python scripts/data/gff_fasta_to_csv.py --fasta shared/datasets/... --gff3 ... --output ...
 """
 
 import json
 from collections import defaultdict
 from pathlib import Path
 
+import argparse
 import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
 
-# ==========================
-# HARD-CODED PATHS / CONSTANTS
-# ==========================
-
-FASTA_PATH  = Path("shared/datasets/TAIR10_genome_release/TAIR10_chromosome_files/TAIR10_chr_all.fas")
-GFF3_PATH   = Path("shared/datasets/TAIR10_genome_release/TAIR10_gff3/TAIR10_GFF3_genes.gff")
-OUTPUT_PATH = Path("Marat/output/tair10_cds_annotations.csv")
+DEFAULT_FASTA = Path("shared/datasets/TAIR10_genome_release/TAIR10_chromosome_files/TAIR10_chr_all.fas")
+DEFAULT_GFF3 = Path("shared/datasets/TAIR10_genome_release/TAIR10_gff3/TAIR10_GFF3_genes.gff")
+DEFAULT_OUTPUT = Path("scripts/data/output/tair10_cds_annotations.csv")
 
 class GFFFeature:
     """Simple container for one GFF3 row."""
@@ -302,17 +296,32 @@ def build_cds_table(
     return df
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Extract CDS annotations to CSV.")
+    parser.add_argument("--fasta", type=Path, default=DEFAULT_FASTA, help="Path to genome FASTA file.")
+    parser.add_argument("--gff3", type=Path, default=DEFAULT_GFF3, help="Path to GFF3 annotations.")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help="Output CSV path for extracted CDS annotations.",
+    )
+    return parser.parse_args()
+
+
 def main():
-    if not FASTA_PATH.exists():
-        raise FileNotFoundError(f"FASTA file not found: {FASTA_PATH}")
-    if not GFF3_PATH.exists():
-        raise FileNotFoundError(f"GFF3 file not found: {GFF3_PATH}")
+    args = parse_args()
 
-    df = build_cds_table(FASTA_PATH, GFF3_PATH)
+    if not args.fasta.exists():
+        raise FileNotFoundError(f"FASTA file not found: {args.fasta}")
+    if not args.gff3.exists():
+        raise FileNotFoundError(f"GFF3 file not found: {args.gff3}")
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(OUTPUT_PATH, index=False)
-    print(f"\nWrote {len(df)} rows to {OUTPUT_PATH}")
+    df = build_cds_table(args.fasta, args.gff3)
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(args.output, index=False)
+    print(f"\nWrote {len(df)} rows to {args.output}")
 
 
 if __name__ == "__main__":
