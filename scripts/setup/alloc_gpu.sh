@@ -3,12 +3,13 @@ module load slurm
 
 set -euo pipefail
 
-# Default settings
+# Default settings (align with working H200 request pattern)
+LAUNCHER="srun"  # or "salloc"
 PARTITION="dgxh"
 GPUS=1
 MEM="64g"
 TIME="12:00:00"
-VRAM=""
+VRAM="140"  # vram constraint; override with --vram
 EXTRA_OPTS=""
 
 usage() {
@@ -20,8 +21,9 @@ Options:
   -g, --gpus        Number of GPUs           (default: $GPUS)
   -m, --mem         Memory per node          (default: $MEM)
   -t, --time        Walltime                 (default: $TIME)
-      --vram        VRAM constraint, e.g. 80g -> --constraint=vram80g
-      --extra       Extra srun options (quoted string)
+      --vram        VRAM constraint, e.g. 80 -> --constraint=vram80g (default: $VRAM)
+      --launcher    srun (default) or salloc
+      --extra       Extra srun/salloc options (quoted string)
   -h, --help        Show this help message
 USAGE
 }
@@ -29,6 +31,8 @@ USAGE
 # Simple flag parser
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --launcher)
+      LAUNCHER="$2"; shift 2;;
     -p|--partition)
       PARTITION="$2"; shift 2;;
     -g|--gpus)
@@ -50,29 +54,31 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-SRUN_CMD=(srun
+CMD=("$LAUNCHER"
   --partition="$PARTITION"
   --gres="gpu:${GPUS}"
   --mem="$MEM"
   --time="$TIME"
-  --pty bash
 )
 
 if [[ -n "$VRAM" ]]; then
-  SRUN_CMD+=(--constraint="vram${VRAM}")
+  CMD+=(--constraint="vram${VRAM}g")
 fi
 
 if [[ -n "$EXTRA_OPTS" ]]; then
   # shellcheck disable=SC2206
   EXTRA_ARR=($EXTRA_OPTS)
-  SRUN_CMD+=("${EXTRA_ARR[@]}")
+  CMD+=("${EXTRA_ARR[@]}")
 fi
 
+# Append shell as the final args so constraints stay with srun/salloc
+CMD+=(--pty bash)
+
 echo "Requesting interactive GPU shell with:"
-printf '  %q ' "${SRUN_CMD[@]}"
+printf '  %q ' "${CMD[@]}"
 echo
 echo
 
 # This will block until a GPU node is available,
 # then drop you into a shell on that node.
-"${SRUN_CMD[@]}"
+"${CMD[@]}"

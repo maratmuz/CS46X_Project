@@ -1,0 +1,43 @@
+runs:
+  seq_context_taxonomy:
+    models:
+      - evo2_7b_base
+    taxonomy:
+      - ""  # none
+      - "species: Arabidopsis thaliana (taxid:3702)"
+      - "species: Arabidopsis thaliana (arabidopsis) (taxid:3702)"
+      - "family: Brassicaceae"
+      - "phylum: Magnoliophyta"
+      - "kingdom: Plantae"
+    # Defaults (can be overridden per-dataset below)
+    context_lengths:
+      - 1000
+      - 2000
+      - 4000
+      - 8000
+    pred_len: 1000
+    temperature: 0.8
+    top_k: 32
+    top_p: 0.95
+    seed: 1
+    max_sequences: 5   # chromosomes: use all five; CDS will override below
+    min_total_length: 9000  # large enough for max context + pred_len
+    max_seqlen: 12000  # cap passed through to Evo2 inference guard
+    datasets:
+      - label: chromosome
+        fasta: "shared/datasets/TAIR10_genome_release/TAIR10_chromosome_files/TAIR10_chr_all.fas"
+        max_sequences: 5
+        min_total_length: 9000
+        context_lengths:
+          - 1000
+          - 2000
+          - 4000
+          - 8000
+      - label: cds_longest
+        fasta: "shared/datasets/TAIR10_genome_release/tair10_longest_cds_top3.fasta"
+        max_sequences: 3
+        min_total_length: 6000
+        context_lengths:
+          - 1000
+          - 2000
+          - 4000

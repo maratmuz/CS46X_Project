@@ -1,0 +1,63 @@
+# EVO2 Prompt/Model Sensitivity Tests (7B/40B only)
+
+Goal: find which EVO2 variant and prompt settings maximize nucleotide accuracy on held-out sequences. Due to GPU limits, code runs will use the 7B variants; the 40B plan is documented here for when resources are available. The 1B model is excluded.
+
+## Models to compare
+- evo2_7b_base (run now)
+- evo2_7b (run now, if available)
+- evo2_40b_base (plan only)
+- evo2_40b (plan only)
+
+## Inputs and prompt window
+- Two input sets:
+  1) CDS-only sequences (3 coding sequences)
+  2) Whole-chromosome segments that contain those same CDS (introns/exons included)
+- **No prompt truncation:** each chosen sequence must be ≥ 1,001,000 bases so every context window below fits plus a 1,000-token output.
+
+## Taxonomy prepend (plain text before DNA)
+Test these variants:
+- none
+- species only: `species: Arabidopsis thaliana (taxid:3702)`
+- species + common name: `species: Arabidopsis thaliana (arabidopsis) (taxid:3702)`
+- family only: `family: Brassicaceae`
+- phylum only: `phylum: Magnoliophyta`
+- kingdom only: `kingdom: Plantae`
+
+(Adjust names/taxids for other organisms as needed; Evo2 accepts free-form text.)
+
+## Context length settings
+Use the same prompt/taxonomy and vary allowed context:
+- 1,000,000
+- 500,000
+- 100,000
+- 10,000
+- 1,000
+
+## Generation settings (fixed)
+- temperature: 1.0
+- top_k: 1
+- top_p: 1.0
+- n_tokens (prediction length): 1,000 bases
+- seed: 1
+
+Note on repetitions: with temperature=top_k=top_p=1, repeated generations on the same prompt are deterministic. Use “repetitions” to mean multiple **distinct sequences** (e.g., 3 CDS and 3 matching chrom segments), not multiple identical reruns.
+
+## Test matrix (per input set)
+For each input set (CDS-only, chromosome segments):
+- For each model (7B now; 40B later)
+  - For each taxonomy variant
+    - For each context length
+      - Run once per distinct sequence (since deterministic).
+
+## Metrics
+Primary:
+- Nucleotide accuracy: % of output bases identical to ground truth (length-normalized to generated length).
+
+Secondary:
+- Edit distance (Levenshtein) per base.
+- Frame-aware AA accuracy: translate and compute % AA identity (ignore trailing stops).
+- Length fidelity: generated_length vs target_length.
+
+## Logging and future plotting
+- Log every run with: model name, taxonomy prepend text, context length, input ID, seed, and exact prompt (or a hash if too long).
+- Store outputs and metrics in CSV/JSON for later plotting (accuracy vs context, taxonomy, model).
