@@ -13,4 +13,4 @@ Sponsor: Ken Janik (ken.janik@gmail.com)
 
 Mentors:
 - Professor Pankaj Jaiswal (pankaj.jaiswal@oregonstate.edu)
-- Professor Molley Megraw (molley.megraw@oregonstate.edu)
+- Professor Molly Megraw (molly.megraw@oregonstate.edu)
