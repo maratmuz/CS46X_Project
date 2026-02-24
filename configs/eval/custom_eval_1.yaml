@@ -1,0 +1,45 @@
+runs:
+  run_1:
+    model_types:
+      - evo2_1b_base
+      - evo2_7b
+      - evo2_7b_base
+      # - evo2_40b
+      # - evo2_40b_base
+    eval:
+      mode: 'seq_pred'
+      repetitions: 4
+      seq_pred_tests:
+        test_1:
+          seq_len: 32
+          pred_len: 128 
+        test_2:
+          seq_len: 64
+          pred_len: 128
+        test_3:
+          seq_len: 128
+          pred_len: 128
+        test_4: 
+          seq_len: 256
+          pred_len: 128
+        test_5:
+          seq_len: 512
+          pred_len: 128
+        test_6:
+          seq_len: 1024
+          pred_len: 128
+        test_7:
+          seq_len: 2048
+          pred_len: 128
+        test_8:
+          seq_len: 4096
+          pred_len: 128
+        test_9:
+          seq_len: 8192
+          pred_len: 128
+        test_10:
+          seq_len: 16384
+          pred_len: 128
+    data:
+      format: 'fasta'
+      path: 'shared/datasets/TAIR10_genome_release/TAIR10_chromosome_files/TAIR10_chr_all.fas'
