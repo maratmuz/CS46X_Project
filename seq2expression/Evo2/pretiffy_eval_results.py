@@ -87,7 +87,8 @@ def plot_confusion_matrices(results: dict, out_dir: Path):
     for i, sp in enumerate(species):
         cm  = np.array(results[sp]["confusion_matrix"])
         ax  = axes[i]
-        im  = ax.imshow(cm, cmap=CMAP, aspect="auto")
+        im  = ax.imshow(cm, cmap=CMAP, aspect="auto", origin="lower")
+        # im  = ax.imshow(cm, cmap=CMAP, aspect="auto")
 
         n_brackets = cm.shape[0]
         labels     = [f"B{b}" for b in range(n_brackets)]
