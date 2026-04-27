@@ -1,6 +1,6 @@
 title: "EVO2 Genomic AI"
 description: "Predicting gene expression from raw DNA sequences using the EVO2 foundation model — Oregon State University CS46X Capstone."
-theme: cayman
+theme: jekyll-theme-cayman
 
 show_downloads: false
 
