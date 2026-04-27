@@ -1,5 +1,11 @@
 # Manual additions
 output/
+training_data/
+Helixer/
+.claude/
+*.gff
+training_log_*.txt
+$NNI_OUTPUT_DIR/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
