@@ -431,8 +431,19 @@ def choose_input_file(files: Sequence[Path], kind: str, directory: Path) -> Path
                 score += 10
         else:
             score = 20 if "genomic" in name else 0
-            if name in {"genomic.gff", "genomic.gff3", "genomic.gtf", "genomic.gff.gz", "genomic.gtf.gz"}:
+            if name in {
+                "genomic.gff",
+                "genomic.gff3",
+                "genomic.gtf",
+                "genomic.gff.gz",
+                "genomic.gff3.gz",
+                "genomic.gtf.gz",
+            }:
                 score += 10
+            # Prefer GFF/GFF3 annotations when both NCBI GFF and GTF exports
+            # are present. GTF remains a supported fallback.
+            if re.search(r"\.gff3?(?:\.gz)?$", name):
+                score += 20
         return score, -len(path.parts), name
 
     ranked = sorted(files, key=rank, reverse=True)
