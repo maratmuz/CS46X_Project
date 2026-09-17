@@ -347,7 +347,10 @@ def write_table_bundle(frame: pd.DataFrame, base: Path, title: str) -> None:
     render_table(frame, base, title)
 
 
-def make_report(run_dirs: Sequence[Path], output_dir: Path, results_subdir: str) -> None:
+def make_report(
+    run_dirs: Sequence[Path], output_dir: Path, results_subdir: str,
+    fine_tuned_supplemental: bool = False,
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     species_rows: list[dict[str, object]] = []
     tissue_frames: list[pd.DataFrame] = []
@@ -569,6 +572,38 @@ Complete numerical results are provided in `tables/overall_metrics.*`, `tables/s
 
 Accuracy, weighted F1, micro-AUROC, and micro-AUPRC emphasize performance on the most frequent decisions. Balanced accuracy, macro-F1, macro-AUROC, and macro-AUPRC give classes equal influence and are more appropriate for comparing minority-class behavior. No single scalar captures the full error pattern, so the manuscript should present at least one prevalence-weighted metric, one macro metric, the class-specific table, and the confusion matrix. The DeepCRE adaptation result should not be compared numerically with the original paper's reported binary accuracies because the input regions, class definitions, tissue organization, and split protocol differ.
 """
+    if fine_tuned_supplemental:
+        paper_summary = f"""# Supplemental fine-tuning benchmark
+
+## Design and caveat
+
+The original PGB-trained heads were continued from their saved best checkpoints in new,
+separate run directories. Fine-tuning used only supplemental train loci with **weak,
+presumed-low** targets and measured PGB train examples replayed in each epoch. The
+The frozen heads retained their original PGB-derived feature normalization;
+all heads retained original PGB training-derived class weights.
+Checkpoint selection used only measured PGB validation macro-F1, with the source
+checkpoint kept as an epoch-zero candidate. Neither PGB test nor supplemental test
+was used for training or selection.
+
+Pseudogenes and intergenic windows have no measured tissue TPM. Their low-call
+rates are behavioral diagnostics, not verified expression accuracy; some
+pseudogenes may be transcribed. Supplemental splits are deterministic and
+stratified by locus type, but not chromosome- or homology-disjoint; their test
+low-call rates may therefore be optimistic. The ordinary metrics in this report are on the
+original held-out PGB test set, using the same TPM boundaries: low
+<{canonical_thresholds['low_upper_exclusive']:g}, medium
+{canonical_thresholds['low_upper_exclusive']:g}–{canonical_thresholds['high_upper_inclusive']:g},
+and high >{canonical_thresholds['high_upper_inclusive']:g} TPM.
+
+## Held-out PGB result
+
+The highest pooled macro-F1 was **{best['head']}** at {best['macro_f1']:.3f}.
+See `tables/overall_metrics.*`, `tables/species_metrics.*`,
+`tables/per_class_metrics.*`, and the confusion-matrix and ROC/PR figures for
+the complete test results. Supplemental test behavior is reported separately
+by `evaluate_tpm_classifiers_supplemental.py`.
+"""
     (output_dir / "paper_ready_summary.md").write_text(paper_summary, encoding="utf-8")
 
     contents = """# Results table of contents
@@ -603,6 +638,7 @@ Accuracy, weighted F1, micro-AUROC, and micro-AUPRC emphasize performance on the
     (output_dir / "CONTENTS.md").write_text(contents, encoding="utf-8")
 
     report_config = {
+        "benchmark_protocol": "supplemental_finetune" if fine_tuned_supplemental else "original_pgb",
         "run_dirs": [str(path.expanduser().resolve()) for path in run_dirs],
         "results_subdir_requested": results_subdir,
         "thresholds_tpm": canonical_thresholds,
@@ -630,13 +666,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--results-subdir", default="evaluation",
         help="Prefer results in this run subdirectory; fall back to training-time outputs",
     )
+    parser.add_argument(
+        "--fine-tuned-supplemental", action="store_true",
+        help="write training-aware narrative for heads continued on supplemental train loci",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parse_args(argv)
-        make_report(args.run_dir, args.output_dir.expanduser().resolve(), args.results_subdir)
+        make_report(
+            args.run_dir, args.output_dir.expanduser().resolve(), args.results_subdir,
+            args.fine_tuned_supplemental,
+        )
         return 0
     except (ReportError, OSError, ValueError, KeyError, ImportError) as error:
         print(f"ERROR: {error}")

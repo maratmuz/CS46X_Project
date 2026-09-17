@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Evaluate trained TPM classifiers on unseen pseudogene/intergenic loci.
+"""Evaluate trained TPM classifiers on pseudogene/intergenic loci.
 
-The classifier heads were trained only on PGB genes. Supplemental loci have no
-tissue TPM measurements, so this script reports *presumed-negative low-call
-rates* rather than claiming ordinary multiclass accuracy. Frozen heads consume
-previously cached supplemental embeddings; the DeepCRE-style CNN consumes the
-same raw 6-kb sequences directly.
+Supplemental loci have no tissue TPM measurements, so this script reports
+*presumed-negative low-call rates* rather than claiming ordinary multiclass
+accuracy. It supports untouched PGB-trained heads and heads continued on
+supplemental train loci. Frozen heads consume cached supplemental embeddings;
+the DeepCRE-style CNN consumes raw 6-kb sequences directly.
 """
 
 from __future__ import annotations
@@ -65,7 +65,9 @@ def discover_runs(runs_root: Path, selected: Sequence[str] | None) -> list[tuple
         head = f"{config['model']}/{config['size']}"
         if wanted and head not in wanted:
             continue
-        if not (run_dir / "summary.json").is_file():
+        if not (run_dir / "summary.json").is_file() and not (
+            run_dir / "evaluation" / "summary.json"
+        ).is_file():
             raise SupplementalError(f"classifier run is incomplete: {run_dir}")
         found.append((run_dir, config))
     if wanted:
@@ -254,7 +256,7 @@ def plot_overall_bars(wide: pd.DataFrame, destination: Path) -> None:
     axis.set_xticks(x, heads, rotation=40, ha="right")
     axis.set_ylim(0, 100)
     axis.set_ylabel("Predicted low (%)")
-    axis.set_title("Unseen supplemental loci called low expression", fontsize=17, fontweight="bold", loc="left")
+    axis.set_title("Supplemental loci called low expression", fontsize=17, fontweight="bold", loc="left")
     axis.grid(axis="y", alpha=0.2)
     axis.legend()
     figure.tight_layout()
@@ -288,7 +290,7 @@ def render_primary_table(wide: pd.DataFrame, destination: Path) -> None:
         if column == 0:
             cell.set_text_props(ha="left", weight="bold" if row else "bold")
     axis.set_title(
-        "Low-expression calls on unseen loci", fontsize=18, fontweight="bold", loc="left", pad=18
+        "Low-expression calls on supplemental loci", fontsize=18, fontweight="bold", loc="left", pad=18
     )
     save_figure(figure, destination)
 
@@ -312,7 +314,10 @@ def plot_species(overall_species: pd.DataFrame, destination: Path) -> None:
     save_figure(figure, destination)
 
 
-def write_report(output_dir: Path, overall: pd.DataFrame, species: pd.DataFrame) -> None:
+def write_report(
+    output_dir: Path, overall: pd.DataFrame, species: pd.DataFrame,
+    fine_tuned: bool = False, splits: Sequence[str] = SPLITS,
+) -> None:
     pivot = overall.pivot(index="head", columns="locus_set", values="low_call_rate").reset_index()
     for locus_set in LOCUS_SETS:
         if locus_set not in pivot:
@@ -339,18 +344,40 @@ def write_report(output_dir: Path, overall: pd.DataFrame, species: pd.DataFrame)
             f"| {row.head} | {markdown_percentage(row.pseudogenes)} | "
             f"{markdown_percentage(row.intergenic)} |"
         )
-    markdown.extend(
-        [
+    if fine_tuned:
+        markdown.extend([
+            "",
+            "## Interpretation",
+            "",
+            "These heads were fine-tuned with weak low targets on supplemental **train** loci, mixed with "
+            "measured PGB **train** replay. Only the supplemental **test** partition is reported here. "
+            "Measured PGB validation selected checkpoints; supplemental validation/test did not. "
+            "The supplemental split is stratified by locus type, not by chromosome or homology, "
+            "so this behavioral test can be optimistic.",
+            "",
+            "The foundation-model pretraining corpora cannot generally be audited for related genomic "
+            "sequence. The DeepCRE-style CNN was also continued on supplemental train sequences.",
+        ])
+    else:
+        split_description = (
+            "All supplemental train/validation/test partitions are pooled"
+            if tuple(splits) == SPLITS else
+            f"Only the supplemental {', '.join(splits)} partition(s) are reported"
+        )
+        markdown.extend([
             "",
             "## Interpretation",
             "",
             "These loci were never used for classifier-head training, class weighting, early stopping, or model selection. "
-            "All supplemental train/validation/test partitions are pooled because those labels refer to a separate "
+            f"{split_description} because those labels refer to a separate "
             "locus-type dataset and none participated in expression-head fitting.",
             "",
             "This claim applies to the task-specific heads. The pretraining corpora of the underlying foundation "
             "models cannot generally be audited well enough to claim that the backbones never encountered related "
             "genomic sequence. DeepCRE is trained end-to-end here, and its task-specific CNN saw only the PGB splits.",
+        ])
+    markdown.extend(
+        [
             "",
             "The supplemental data have no measured tissue TPM. Therefore, `low_call_rate` is a presumed-negative "
             "behavioral test, not verified biological accuracy. This caveat is especially important for pseudogenes, "
@@ -371,6 +398,10 @@ def evaluate(args: argparse.Namespace) -> int:
     embed_root = args.embed_root.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     runs = discover_runs(sweep_dir / "runs", args.models)
+    if args.fine_tuned and list(args.splits) != ["test"]:
+        raise SupplementalError("--fine-tuned requires --splits test to avoid evaluating training loci")
+    if args.fine_tuned and any(config.get("command") != "supplemental_finetune" for _, config in runs):
+        raise SupplementalError("--fine-tuned requires runs produced by supplemental fine-tuning")
     missing = missing_embedding_paths(runs, embed_root, args.locus_sets, args.splits)
     if missing:
         sample = "\n".join(f"  - {path}" for path in missing[:12])
@@ -442,7 +473,7 @@ def evaluate(args: argparse.Namespace) -> int:
     by_species.to_csv(output_dir / "metrics_by_model_species_category.csv", index=False)
     by_tissue.to_csv(output_dir / "metrics_by_model_species_tissue_category.csv", index=False)
     by_split.to_csv(output_dir / "metrics_by_model_species_split_category.csv", index=False)
-    write_report(output_dir, overall, by_species)
+    write_report(output_dir, overall, by_species, args.fine_tuned, args.splits)
     common.write_json_atomic(
         {
             "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -454,7 +485,11 @@ def evaluate(args: argparse.Namespace) -> int:
             "splits_pooled": args.splits,
             "device": args.device,
             "interpretation": "presumed-negative low-call behavior; supplemental tissue TPM is unavailable",
-            "leakage_control": "supplemental data unused for training, weighting, early stopping, and selection",
+            "leakage_control": (
+                "fine-tuned on supplemental train plus PGB train; selected on PGB validation; "
+                "supplemental test held out" if args.fine_tuned else
+                "supplemental data unused for training, weighting, early stopping, and selection"
+            ),
         },
         output_dir / "evaluation_config.json",
     )
@@ -475,6 +510,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--deepcre-batch-size", type=int, default=128)
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--fine-tuned", action="store_true",
+        help="use training-aware report language and require supplemental test only",
+    )
     return parser.parse_args(argv)
 
 
