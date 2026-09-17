@@ -8,11 +8,11 @@
 
 #SBATCH --job-name=tpm-supp-finetune
 #SBATCH --account=eecs
-#SBATCH --partition=gpu
+#SBATCH --partition=dgxh
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
-#SBATCH --time=3-00:00:00
+#SBATCH --time=1-00:00:00
 #SBATCH --output=tpm-supp-finetune-%j.log
 
 set -euo pipefail
